@@ -37,7 +37,9 @@ uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
 
 ## 遊戲內插件(plugin/,BepInEx 6)
 
-按 **F8**(BepInEx 設定 `known-unknown.cfg` 可改)開關視窗，列出**這一旬**還看得到白字的地方：
+按 **F8**(BepInEx 設定 `known-unknown.cfg` 可改)開關視窗，列出**這一旬**還看得到白字的地方；開著時會跟著遊戲狀態自動更新。
+
+選單出現時，右上角會自動列出每個選項會看到多少白字(地點行動顯示抽到沒看過結果的機率)。設定 `MenuHints=false` 可關閉。
 
 - 這一旬已經生效的任務(`MissionManagerData.ActiveSubMissions` + 主線)：要去哪個地點，或本旬會自動觸發
 - 各地點的隨機事件：用遊戲自己的 `PositionEventData.GetRate()` 算當下機率，只列還有白字的

@@ -4,7 +4,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>KnownUnknown</AssemblyName>
     <RootNamespace>KnownUnknown</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <DebugType>none</DebugType>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
@@ -26,5 +26,6 @@
     <Reference Include="$(Managed)/Mortal.Free.dll" Private="false" />
     <Reference Include="$(Managed)/OBB.Framework.dll" Private="false" />
     <Reference Include="$(Managed)/LeanLocalization.dll" Private="false" />
+    <Reference Include="$(Managed)/Fungus.dll" Private="false" />
   </ItemGroup>
 </Project>
