@@ -14,13 +14,14 @@ using UnityEngine;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.2.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.3.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
 
         private ConfigEntry<KeyCode> _toggleKey;
         private ConfigEntry<bool> _menuHints;
+        private ConfigEntry<bool> _mapHints;
         private Harmony _harmony;
 
         // 劇本索引：讀檔在主執行緒，解析在背景
@@ -49,6 +50,7 @@ namespace KnownUnknown
             // F3 是 LegendOfMortalMod 的選單鍵
             _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "開關「這一旬去哪裡能看到白字」視窗");
             _menuHints = Config.Bind("General", "MenuHints", true, "選單出現時，顯示每個選項會看到多少白字");
+            _mapHints = Config.Bind("General", "MapHints", true, "在自由行動地圖上，顯示本旬去哪裡能看到白字");
 
             // Lua 的 choose() 每個選項呼叫一次這個多載；只加 postfix,不改遊戲行為
             MethodInfo addOption = typeof(MenuDialog).GetMethods().First(m =>
@@ -81,7 +83,7 @@ namespace KnownUnknown
                 _show = !_show;
                 _signature = null;
             }
-            if (_show && Time.unscaledTime >= _nextCheck)
+            if ((_show || OnMap()) && Time.unscaledTime >= _nextCheck)
             {
                 _nextCheck = Time.unscaledTime + 1;
                 RefreshIfChanged();
@@ -133,6 +135,10 @@ namespace KnownUnknown
             int unread = Game.Unread(_index.AllKeys);
             int total = _index.TotalKeys;
             _summary = $"全部台詞已讀 {total - unread}/{total}({100f * (total - unread) / total:F1}%),白字 {unread} 句";
+            // 寫進 BepInEx 日誌，方便對照驗證
+            Logger.LogInfo($"[本旬] {t.Year}年{t.Month}月{t.Stage} " + _summary);
+            foreach (Hint h in _list)
+                Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {h.Unread}句 | {h.Detail}");
         }
 
         private void OnMenuStart(MenuDialog menu)
@@ -160,6 +166,7 @@ namespace KnownUnknown
             {
                 string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
                 string info = p._hints.ForOption(script, text);
+                p.Logger.LogInfo($"[選單] {script} | {text} → {info ?? "(不認得)"}");
                 if (info != null)
                     p._menuLines.Add(new KeyValuePair<string, string>(Text.OptionLabel(text), info));
             }
@@ -169,10 +176,17 @@ namespace KnownUnknown
             }
         }
 
+        // 自由行動地圖(選地點的畫面)
+        private static bool OnMap()
+        {
+            return UnityEngine.SceneManagement.SceneManager.GetSceneByName("Free").isLoaded;
+        }
+
         private void OnGUI()
         {
             bool menu = _menu != null && _menu.IsActive() && _menuLines.Count > 0;
-            if (!_show && !menu)
+            bool map = !menu && !_show && _mapHints.Value && _hints != null && OnMap();
+            if (!_show && !menu && !map)
                 return;
             if (_small == null)
             {
@@ -184,25 +198,42 @@ namespace KnownUnknown
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
             if (menu)
                 DrawMenuHints();
+            if (map)
+                DrawMapHints();
             if (_show)
                 _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢 — 這一旬去哪裡能看到白字");
         }
 
-        // 選單旁的小框：不擋選項，固定在右上角
-        private void DrawMenuHints()
+        // 右上角小框，避開左上角的心相/行動列
+        private void DrawBox(string title, List<KeyValuePair<string, string>> lines)
         {
-            float width = 460;
+            float width = 520;
             float right = Screen.width * 1080f / Screen.height;   // GUI.matrix 縮放後的畫面寬
-            GUILayout.BeginArea(new Rect(right - width - 20, 20, width, 40 + 30 * _menuLines.Count), GUI.skin.box);
-            GUILayout.Label("多玩10塊錢");
-            foreach (KeyValuePair<string, string> l in _menuLines)
+            GUILayout.BeginArea(new Rect(right - width - 20, 150, width, 40 + 30 * lines.Count), GUI.skin.box);
+            GUILayout.Label(title);
+            foreach (KeyValuePair<string, string> l in lines)
             {
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(l.Key, GUILayout.Width(170));
+                GUILayout.Label(l.Key, GUILayout.Width(220));
                 GUILayout.Label(l.Value, l.Value == "已看完" ? _small : GUI.skin.label);
                 GUILayout.EndHorizontal();
             }
             GUILayout.EndArea();
+        }
+
+        private void DrawMenuHints()
+        {
+            DrawBox("多玩10塊錢 — 選了會看到", _menuLines);
+        }
+
+        // 地圖上只列機率最高的幾個，完整清單按 F8
+        private void DrawMapHints()
+        {
+            List<KeyValuePair<string, string>> lines = _list.Where(h => h.Rank >= 0).Take(6)
+                .Select(h => new KeyValuePair<string, string>(h.Where, $"{h.Chance}({h.Unread} 句)")).ToList();
+            if (lines.Count == 0)
+                lines.Add(new KeyValuePair<string, string>("本旬各地點都看完了", ""));
+            DrawBox($"多玩10塊錢 — 本旬白字(完整清單按 {_toggleKey.Value})", lines);
         }
 
         private void DrawWindow(int id)

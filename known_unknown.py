@@ -41,7 +41,10 @@ FLAG_READERS = {"StatGroupVariable", "FlagData",
 KEY_RE = re.compile(r'GetStoryText\("([^"]+)"\)')
 CAST_RE = re.compile(r'characters\.Get\("([^"]+)"\)')
 NOT_CAST = re.compile(r"player|unknown|pigeon")   # 主角自己、？？？、信鴿不算登場人物
-STR_RE = re.compile(r'"([A-Za-z0-9_]+)"')
+# 只有這些呼叫的參數才是劇本名；ShowPicture/SetFlag/Switch 的參數常剛好和劇本同名，不能算
+SCRIPT_RE = re.compile(r'luamanager\.(?:SetNextScript|SetCurrentStoryScript|SetCurrentTravelScript)\("([A-Za-z0-9_]+)"'
+                       r'|luamanager\.SetTempScript\(\d+, "([A-Za-z0-9_]+)"')
+POSITION_RE = re.compile(r'checkpointmanager\.Position\("([A-Za-z0-9_]+)"')
 FLAG_WRITE_RE = re.compile(r'statmodifymanager\.(?:SetFlag|AddFlag)\("([^"]+)"')
 
 
@@ -263,9 +266,10 @@ def build(game):
     edges = {}                                  # 劇本 -> [(下一個劇本, 經由的入口或 None)]
     for n, t in scripts.items():
         out = {}
-        for s in map(str.lower, STR_RE.findall(t)):
-            if s in names and s != n:
-                out.setdefault(s, None)
+        for s in (a or b for a, b in SCRIPT_RE.findall(t)):
+            if s.lower() in names and s.lower() != n:
+                out.setdefault(s.lower(), None)
+        for s in map(str.lower, POSITION_RE.findall(t)):
             for target, e in linked.get(s, []):
                 if target in names and target != n:
                     out.setdefault(target, e)
@@ -415,7 +419,15 @@ def main():
     ap.add_argument("--only", help="只列某分類，例如「第8章」「支線」「談話」")
     ap.add_argument("--unreachable", action="store_true", help="列出判定為不可達的劇本與原因")
     ap.add_argument("--spoil", action="store_true", help="顯示每段白字的開頭第一句(輕微劇透)")
+    ap.add_argument("--dump-scripts", metavar="DIR", help="把劇本(story/chinesetraditional)匯出成 DIR/<名>.lua 後結束")
     a = ap.parse_args()
+
+    if a.dump_scripts:
+        os.makedirs(a.dump_scripts, exist_ok=True)
+        for n, t in load_scripts(a.game).items():
+            with open(os.path.join(a.dump_scripts, n + ".lua"), "w", encoding="utf-8") as f:
+                f.write(t)
+        return
 
     if a.rebuild or not os.path.exists(a.cache):
         db = build(a.game)

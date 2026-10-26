@@ -30,7 +30,8 @@ namespace KnownUnknown
     {
         private readonly StoryIndex _index;
         private readonly List<FreePositionData> _places;
-        private readonly Dictionary<string, PositionResultData> _results;
+        private readonly Dictionary<string, PositionResultData> _results = new Dictionary<string, PositionResultData>();
+        private readonly Dictionary<string, SwitchResultData> _switches = new Dictionary<string, SwitchResultData>();
 
         // PositionType 的 [StringValue];畫面上的名字在 Position/Name/<值>(enum 名「校場」畫面上是「練功場」)
         private static readonly string[] PlaceKeys =
@@ -42,9 +43,10 @@ namespace KnownUnknown
         {
             _index = index;
             _places = places;
-            _results = new Dictionary<string, PositionResultData>();
             foreach (PositionResultData p in Resources.FindObjectsOfTypeAll<PositionResultData>())
                 _results[p.name.ToLowerInvariant()] = p;
+            foreach (SwitchResultData s in Resources.FindObjectsOfTypeAll<SwitchResultData>())
+                _switches[s.name] = s;
         }
 
         // 有自己入口的劇本：任務起點、地點預設劇本。算「後續劇情」時走到這裡就停，免得主線一路串到結局。
@@ -56,6 +58,49 @@ namespace KnownUnknown
             foreach (FreePositionData p in places)
                 stop.Add(DefaultScript(p));
             return stop;
+        }
+
+        // 同 SwitchResultData.Execute(),但不碰 _count:Execute 每呼叫一次計數 +1,插件絕不能呼叫它
+        private int SwitchValue(string name)
+        {
+            if (!_switches.TryGetValue(name, out SwitchResultData s))
+                return -1;
+            Traverse t = Traverse.Create(s);
+            if (t.Field("_useCount").GetValue<bool>())
+            {
+                int count = t.Field("_count").GetValue<int>() + 1;
+                List<ValueCompareItem> counts = t.Field("_countItems").GetValue<List<ValueCompareItem>>();
+                for (int i = 0; i < counts.Count; i++)
+                {
+                    if (counts[i].Check(count))
+                        return i + 1;
+                }
+                return counts.Count + 1;
+            }
+            List<ConditionResultItem> items = t.Field("_items").GetValue<List<ConditionResultItem>>();
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (items[i].Check())
+                    return i + 1;
+            }
+            return items.Count + 1;
+        }
+
+        // 這一行在目前遊戲狀態下走不走得到。choiceVar/choice:玩家打算選的選項；其他選單、骰子當成都可能。
+        private bool Possible(Guard[] guards, string choiceVar, int choice)
+        {
+            foreach (Guard g in guards)
+            {
+                if (g.Kind == GuardKind.Choice && g.Name == choiceVar && g.Value != choice)
+                    return false;
+                if (g.Kind == GuardKind.Switch)
+                {
+                    int v = SwitchValue(g.Name);
+                    if (v >= 0 && v != g.Value)
+                        return false;
+                }
+            }
+            return true;
         }
 
         // 完全照 PositionResultData.GetResult / PositionEvent:依清單順序取機率 > 0 的事件，
@@ -90,28 +135,38 @@ namespace KnownUnknown
             return roll;
         }
 
-        // 選單上某個選項：選了會看到多少白字
+        // 選單上某個選項：選了會看到多少白字。null = 這個選單不認得
         public string ForOption(string script, string option)
         {
-            OptionBranch b = _index.Option(script, option);
-            if (b == null)
+            Script s = _index.Get(script);
+            if (s == null || !s.Options.TryGetValue(option.TrimStart('~'), out KeyValuePair<string, int> pick))
                 return null;
-            int unread = Game.Unread(b.Keys);
+            HashSet<string> keys = new HashSet<string>();
             List<string> parts = new List<string>();
-            foreach (string p in b.Positions)
+            foreach (Item i in s.Items)
             {
-                if (!_results.TryGetValue(p, out PositionResultData pr))
+                // 只看這個選項的分支，而且分支裡的 Switch 條件現在要成立
+                if (!i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == pick.Key && g.Value == pick.Value)
+                    || !Possible(i.Guards, pick.Key, pick.Value))
                     continue;
-                Roll r = RollOf(pr);
-                if (r.Unread > 0)
-                    parts.Add($"{r.Chance}% 抽到白字({r.Unread} 句)");
+                if (i.Kind == ItemKind.Key)
+                    keys.Add(i.Value);
+                else if (i.Kind == ItemKind.Script)
+                    keys.UnionWith(_index.ClosureKeys(i.Value));
+                else if (_results.TryGetValue(i.Value, out PositionResultData pr))
+                {
+                    Roll r = RollOf(pr);
+                    if (r.Unread > 0)
+                        parts.Add($"{r.Chance}% 抽到白字({r.Unread} 句)");
+                }
             }
+            int unread = Game.Unread(keys);
             if (unread > 0)
                 parts.Add($"白字 {unread} 句");
             return parts.Count == 0 ? "已看完" : string.Join(",", parts);
         }
 
-        // F8 清單：這一旬去哪裡能看到白字
+        // F8 清單/地圖提示：這一旬去哪裡能看到白字
         public List<Hint> ForTurn()
         {
             List<Hint> hints = new List<Hint>();
@@ -155,25 +210,30 @@ namespace KnownUnknown
             foreach (FreePositionData place in _places)
             {
                 string start = DefaultScript(place);
-                if (!_index.Has(start) || !place.GetActiveConditionResult())
+                if (!_index.Has(start) || Disabled(place))
                     continue;
                 string where = "去" + place.name.Split('_').Last();
-                foreach (string r in _index.ClosurePositions(start))
+                HashSet<string> seen = new HashSet<string>();
+                foreach (string script in _index.ClosureScripts(start))
                 {
-                    if (!_results.TryGetValue(r, out PositionResultData pr))
-                        continue;
-                    Roll roll = RollOf(pr);
-                    if (roll.Unread == 0)
-                        continue;
-                    string action = _index.ActionOf(r);
-                    hints.Add(new Hint
+                    foreach (Item i in _index.Get(script).Items)
                     {
-                        Where = where + (action == null ? "" : $" →「{Text.OptionLabel(action)}」"),
-                        Chance = roll.Chance + "%",
-                        Detail = "沒看過的結果：" + string.Join("、", roll.Unseen),
-                        Rank = roll.Chance,
-                        Unread = roll.Unread,
-                    });
+                        if (i.Kind != ItemKind.Position || !seen.Add(i.Value) || !Possible(i.Guards, null, 0)
+                            || !_results.TryGetValue(i.Value, out PositionResultData pr))
+                            continue;
+                        Roll roll = RollOf(pr);
+                        if (roll.Unread == 0)
+                            continue;
+                        string action = _index.ActionOf(i.Value);
+                        hints.Add(new Hint
+                        {
+                            Where = where + (action == null ? "" : $" →「{Text.OptionLabel(action)}」"),
+                            Chance = roll.Chance + "%",
+                            Detail = "沒看過的結果：" + string.Join("、", roll.Unseen),
+                            Rank = roll.Chance,
+                            Unread = roll.Unread,
+                        });
+                    }
                 }
             }
         }
@@ -182,6 +242,16 @@ namespace KnownUnknown
         {
             int i = (int)p;
             return i > 0 && i < PlaceKeys.Length ? Text.Get("Position/Name/" + PlaceKeys[i], p.ToString()) : p.ToString();
+        }
+
+        // 同 FreePositionData.GetActiveConditionResult() 的反面，但不呼叫會讓計數 +1 的 ConditionResultData.Execute()
+        private static bool Disabled(FreePositionData p)
+        {
+            object cond = Traverse.Create(p).Field("_disableCondition").GetValue();
+            if (cond == null)
+                return false;
+            List<ConditionResultItem> items = Traverse.Create(cond).Field("_items").GetValue<List<ConditionResultItem>>();
+            return items != null && items.Any(i => i.Check());
         }
 
         public static string DefaultScript(FreePositionData p) =>

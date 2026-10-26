@@ -7,39 +7,66 @@ using UnityEngine;
 
 namespace KnownUnknown
 {
-    // 選單上一個選項對應的 Lua 分支：if choice_x == N then … 裡面出現的台詞與地點事件表
-    internal class OptionBranch
+    internal enum GuardKind
     {
-        public string[] Keys;        // 分支內直接 say 的台詞，加上分支點名劇本的後續台詞
-        public string[] Positions;   // 分支內 checkpointmanager.Position("X") 的 X(小寫)
+        Switch,  // local r = checkpointmanager.Switch("S") … if r == N:遊戲狀態決定，可即時判斷
+        Choice,  // local c = choose(arr) … if c == N:玩家選第 N 個選項
+        Random,  // 骰子、math.random:一律當成可能
     }
 
-    // 劇本 → 台詞 key、劇本之間的字串引用、選單分支。遊戲啟動後建一次，內容不會變。
-    // 劇本共 65MB,Unity 的 Mono 正規表示式很慢：讀檔(Load)在主執行緒，解析(建構子)丟背景執行緒。
+    // 所在分支的一個條件：變數 == Value
+    internal struct Guard
+    {
+        public GuardKind Kind;
+        public string Name;   // Switch 名或 choice 變數名
+        public int Value;
+    }
+
+    internal enum ItemKind
+    {
+        Key,       // say(luamanager.GetStoryText("K"))
+        Script,    // SetNextScript / SetCurrentStoryScript / SetCurrentTravelScript / SetTempScript
+        Position,  // checkpointmanager.Position("X"):地點事件表，執行時才抽出結果劇本
+    }
+
+    internal struct Item
+    {
+        public ItemKind Kind;
+        public string Value;
+        public Guard[] Guards;
+    }
+
+    // 一份劇本解析後的樣子
+    internal class Script
+    {
+        public Item[] Items;
+        // 選項字串 -> (choice 變數, 第幾個)
+        public Dictionary<string, KeyValuePair<string, int>> Options = new Dictionary<string, KeyValuePair<string, int>>();
+        public string[] Cast;
+    }
+
+    // 劇本解析與靜態關係。遊戲啟動後建一次，內容不會變。
+    // 劇本共 65MB,Unity 的 Mono 正規表示式很慢：讀檔(Load)在主執行緒，解析(建構子)丟背景執行緒，
+    // 逐行字串處理不用正規表示式。
     internal class StoryIndex
     {
         // LuaManager 從 Resources 的 Story/ChineseTraditional/<劇本> 載入；Resources 路徑不分大小寫，一律小寫
         private const string ScriptFolder = "Story/ChineseTraditional";
-        private static readonly Regex KeyRe = new Regex("GetStoryText\\(\"([^\"]+)\"\\)");
-        private static readonly Regex StrRe = new Regex("\"([A-Za-z0-9_]+)\"");
         private static readonly Regex CastRe = new Regex("characters\\.Get\\(\"([^\"]+)\"\\)");
-        private static readonly Regex PositionRe = new Regex("checkpointmanager\\.Position\\(\"([^\"]+)\"\\)");
         // 主角自己、？？？、信鴿不算登場人物
         private static readonly Regex NotCast = new Regex("player|unknown|pigeon");
+        // 只有這些呼叫的參數才是劇本名。ShowPicture/SetFlag/Switch 的參數常剛好和劇本同名，不能算。
+        private static readonly string[] Transitions =
+        {
+            "luamanager.SetNextScript(", "luamanager.SetCurrentStoryScript(", "luamanager.SetCurrentTravelScript(",
+            "luamanager.SetTempScript(",
+        };
 
-        private readonly Dictionary<string, string[]> _keys = new Dictionary<string, string[]>();
-        private readonly Dictionary<string, string[]> _refs = new Dictionary<string, string[]>();
-        // 劇本 -> checkpointmanager.Position("X") 的 X。事件表名常和其中一個結果劇本同名
-        // (Mall_Free_001 抽到「正常_001」= mall_free_001),所以不能當成劇本引用，否則隨機結果會被當成必定發生。
-        private readonly Dictionary<string, string[]> _positions = new Dictionary<string, string[]>();
-        private readonly Dictionary<string, string[]> _cast = new Dictionary<string, string[]>();
-        // 劇本 -> 它和它沿字串引用接下去的劇本的所有台詞(遇到有自己入口的劇本就停)
+        private readonly Dictionary<string, Script> _scripts = new Dictionary<string, Script>();
+        // 劇本 -> 沿劇本跳轉接下去的劇本(含自己；遇到有自己入口的劇本就停)
+        private readonly Dictionary<string, string[]> _closure = new Dictionary<string, string[]>();
         private readonly Dictionary<string, string[]> _closureKeys = new Dictionary<string, string[]>();
-        private readonly Dictionary<string, string[]> _closurePositions = new Dictionary<string, string[]>();
-        // 劇本 -> 選項字串 -> 分支
-        private readonly Dictionary<string, Dictionary<string, OptionBranch>> _options =
-            new Dictionary<string, Dictionary<string, OptionBranch>>();
-        // 地點事件表名 -> 地點選單上那個選項的字串
+        // 地點事件表名 -> 從選單哪個選項進去(選項字串)
         private readonly Dictionary<string, string> _actions = new Dictionary<string, string>();
 
         public int TotalKeys { get; private set; }
@@ -57,73 +84,58 @@ namespace KnownUnknown
         {
             foreach (KeyValuePair<string, string> s in scripts)
             {
-                string text = s.Value;
-                _keys[s.Key] = KeyRe.Matches(text).Cast<Match>().Select(m => m.Groups[1].Value).ToArray();
-                _positions[s.Key] = Positions(text);
-                _refs[s.Key] = Refs(text, _positions[s.Key]);
-                _cast[s.Key] = CastRe.Matches(text).Cast<Match>().Select(m => m.Groups[1].Value)
+                Script p = Parse(s.Value);
+                p.Cast = CastRe.Matches(s.Value).Cast<Match>().Select(m => m.Groups[1].Value)
                     .Where(c => !NotCast.IsMatch(c))
                     .GroupBy(c => c).OrderByDescending(g => g.Count()).Select(g => g.Key).ToArray();
-                TotalKeys += _keys[s.Key].Length;
+                _scripts[s.Key] = p;
+                TotalKeys += p.Items.Count(i => i.Kind == ItemKind.Key);
             }
-            foreach (string name in _keys.Keys.ToArray())
+            foreach (KeyValuePair<string, Script> s in _scripts)
             {
-                HashSet<string> closure = Closure(name, stop);
-                _closureKeys[name] = closure.SelectMany(n => _keys[n]).Distinct().ToArray();
-                _closurePositions[name] = closure.SelectMany(n => _positions[n]).Distinct().ToArray();
-            }
-            foreach (KeyValuePair<string, string> s in scripts)
-            {
-                if (s.Value.Contains("choose("))
-                    _options[s.Key] = ParseOptions(s.Value);
+                _closure[s.Key] = Closure(s.Key, stop).ToArray();
+                _closureKeys[s.Key] = _closure[s.Key].SelectMany(n => Of(n, ItemKind.Key)).Distinct().ToArray();
+                IndexActions(s.Value);
             }
         }
 
-        public bool Has(string script) => _keys.ContainsKey(script);
+        public bool Has(string script) => _scripts.ContainsKey(script);
 
-        public IEnumerable<string> AllKeys => _keys.Values.SelectMany(k => k);
+        public Script Get(string script) =>
+            script != null && _scripts.TryGetValue(script, out Script s) ? s : null;
+
+        public IEnumerable<string> AllKeys => _scripts.Values.SelectMany(s => s.Items)
+            .Where(i => i.Kind == ItemKind.Key).Select(i => i.Value);
 
         public string[] ClosureKeys(string script) =>
             _closureKeys.TryGetValue(script, out string[] k) ? k : new string[0];
 
-        // 劇本和它後續劇本會抽的地點事件表
-        public string[] ClosurePositions(string script) =>
-            _closurePositions.TryGetValue(script, out string[] r) ? r : new string[0];
+        public string[] ClosureScripts(string script) =>
+            _closure.TryGetValue(script, out string[] k) ? k : new string[0];
 
-        private static string[] Positions(string text) =>
-            PositionRe.Matches(text).Cast<Match>().Select(m => m.Groups[1].Value.ToLowerInvariant()).Distinct().ToArray();
-
-        private static string[] Refs(string text, string[] positions) =>
-            StrRe.Matches(text).Cast<Match>().Select(m => m.Groups[1].Value.ToLowerInvariant())
-                .Except(positions).ToArray();
-
-        public OptionBranch Option(string script, string option)
-        {
-            if (script == null || !_options.TryGetValue(script, out Dictionary<string, OptionBranch> d))
-                return null;
-            return d.TryGetValue(option.TrimStart('~'), out OptionBranch b) ? b : null;
-        }
-
-        // 地點事件表是從哪個選項進去的(F8 清單要寫「去正心堂 →「靜坐冥想」」)
         public string ActionOf(string positionResult) =>
             _actions.TryGetValue(positionResult, out string a) ? a : null;
 
         // 玩家認得出來的描述：登場人物的遊戲內名字(Character/<id>)
         public string Cast(string script, int max = 4)
         {
-            if (!_cast.TryGetValue(script, out string[] ids) || ids.Length == 0)
+            Script s = Get(script);
+            if (s == null || s.Cast.Length == 0)
                 return "";
-            return string.Join("、", ids.Select(id => Text.Get("Character/" + id, id)).Distinct().Take(max));
+            return string.Join("、", s.Cast.Select(id => Text.Get("Character/" + id, id)).Distinct().Take(max));
         }
 
-        // 從 start 沿字串引用走到的劇本(含自己)。stop 裡的劇本有自己的入口，不算進來(start 本身除外)。
+        private IEnumerable<string> Of(string script, ItemKind kind) =>
+            _scripts[script].Items.Where(i => i.Kind == kind).Select(i => i.Value);
+
+        // 從 start 沿劇本跳轉走到的劇本(含自己)。stop 裡的劇本有自己的入口，不算進來(start 本身除外)。
         private HashSet<string> Closure(string start, HashSet<string> stop)
         {
             HashSet<string> seen = new HashSet<string> { start };
             Queue<string> queue = new Queue<string>(seen);
             while (queue.Count > 0)
             {
-                foreach (string s in _refs[queue.Dequeue()])
+                foreach (string s in Of(queue.Dequeue(), ItemKind.Script))
                 {
                     if (Has(s) && !stop.Contains(s) && seen.Add(s))
                         queue.Enqueue(s);
@@ -132,86 +144,142 @@ namespace KnownUnknown
             return seen;
         }
 
-        // Lua 選單長這樣(Fungus 的 choose 依序 AddOption,第 i 個選項回傳 i):
-        //   mall[2] = "meditate+free+meditate"          或 x[3] = Cond and "O_xxx" or "~x"
-        //   local choice_mall = choose(mall)
-        //   elseif choice_mall == 2 then …(縮排較深的這一段就是分支)
-        // 用逐行字串處理，不用正規表示式(Mono 上太慢)
-        private Dictionary<string, OptionBranch> ParseOptions(string text)
+        // 地點事件表若在選單分支裡，記下是哪個選項(F8 清單要寫「去正心堂 →「靜坐冥想」」)
+        private void IndexActions(Script s)
         {
-            string[] lines = text.Split('\n');
-            Dictionary<string, string> chooses = new Dictionary<string, string>();   // choice 變數 -> 陣列名
-            Dictionary<string, string> entries = new Dictionary<string, string>();   // "陣列[i]" -> 選項字串
-            Dictionary<string, int[]> branches = new Dictionary<string, int[]>();    // "變數==i" -> [起, 迄)
-            for (int n = 0; n < lines.Length; n++)
+            foreach (Item i in s.Items.Where(i => i.Kind == ItemKind.Position))
             {
-                string l = lines[n].Trim();
-                if (l.StartsWith("local ") && l.Contains(" = choose("))
+                foreach (Guard g in i.Guards.Where(g => g.Kind == GuardKind.Choice))
                 {
-                    int p = l.IndexOf("choose(") + 7;
-                    chooses[l.Substring(6, l.IndexOf(" =") - 6)] = l.Substring(p, l.IndexOf(')', p) - p);
-                    continue;
-                }
-                int b = l.IndexOf("] = ");
-                int open = l.IndexOf('[');
-                if (b > 0 && open > 0 && open < b && l.IndexOf('"', b) > 0)
-                {
-                    int q = l.IndexOf('"', b);
-                    int e = l.IndexOf('"', q + 1);
-                    if (e > q)
-                        entries[l.Substring(0, b + 1)] = l.Substring(q + 1, e - q - 1);
-                    continue;
-                }
-                if ((l.StartsWith("if ") || l.StartsWith("elseif ")) && l.EndsWith(" then") && l.Contains(" == "))
-                {
-                    int sp = l.IndexOf(' ') + 1;
-                    string cond = l.Substring(sp, l.Length - sp - 5);
-                    int eq = cond.IndexOf(" == ");
-                    string val = cond.Substring(eq + 4);
-                    if (!int.TryParse(val, out _))
-                        continue;
-                    int ind = Indent(lines[n]);
-                    int end = lines.Length;
-                    for (int m = n + 1; m < lines.Length; m++)
-                    {
-                        if (lines[m].Trim().Length > 0 && Indent(lines[m]) <= ind)
-                        {
-                            end = m;
-                            break;
-                        }
-                    }
-                    branches[cond.Substring(0, eq) + "==" + val] = new[] { n + 1, end };
+                    KeyValuePair<string, KeyValuePair<string, int>> o = s.Options.FirstOrDefault(x =>
+                        x.Value.Key == g.Name && x.Value.Value == g.Value);
+                    if (o.Key != null && !_actions.ContainsKey(i.Value))
+                        _actions[i.Value] = o.Key;
                 }
             }
-
-            Dictionary<string, OptionBranch> result = new Dictionary<string, OptionBranch>();
-            foreach (KeyValuePair<string, string> c in chooses)
-            {
-                for (int i = 1; entries.TryGetValue(c.Value + "[" + i + "]", out string option); i++)
-                {
-                    if (!branches.TryGetValue(c.Key + "==" + i, out int[] range))
-                        continue;
-                    string seg = string.Join("\n", lines, range[0], range[1] - range[0]);
-                    string[] positions = Positions(seg);
-                    IEnumerable<string> keys = KeyRe.Matches(seg).Cast<Match>().Select(m => m.Groups[1].Value);
-                    foreach (string s in Refs(seg, positions))
-                    {
-                        if (Has(s))
-                            keys = keys.Concat(ClosureKeys(s));
-                    }
-                    result[option.TrimStart('~')] = new OptionBranch
-                    {
-                        Keys = keys.Distinct().ToArray(),
-                        Positions = positions,
-                    };
-                    foreach (string p in positions)
-                        _actions[p] = option;
-                }
-            }
-            return result;
         }
 
-        private static int Indent(string line) => line.Length - line.TrimStart(' ', '\t').Length;
+        // Lua 劇本是工具產生的，格式很固定：
+        //   local r = checkpointmanager.Switch("S") / local c = choose(arr) / local d = checkpointmanager.Dice(…)
+        //   arr[2] = "meditate+free+meditate"   或 arr[3] = Cond and "O_xxx" or "~x"
+        //   if r == 1 then … elseif r == 2 then … else … end(分支內容縮排較深)
+        // 逐行用縮排追蹤巢狀分支，每句台詞、劇本跳轉、地點事件表都記下所在分支的條件。
+        private static Script Parse(string text)
+        {
+            Script script = new Script();
+            List<Item> items = new List<Item>();
+            Dictionary<string, Guard> vars = new Dictionary<string, Guard>();
+            Dictionary<string, Dictionary<int, string>> arrays = new Dictionary<string, Dictionary<int, string>>();
+            Dictionary<string, string> chooses = new Dictionary<string, string>();   // choice 變數 -> 陣列
+            List<KeyValuePair<int, Guard?>> stack = new List<KeyValuePair<int, Guard?>>();
+            Guard[] guards = new Guard[0];
+
+            foreach (string raw in text.Split('\n'))
+            {
+                string l = raw.Trim();
+                if (l.Length == 0 || l.StartsWith("--"))
+                    continue;
+                int ind = raw.Length - raw.TrimStart(' ', '\t').Length;
+                bool popped = false;
+                while (stack.Count > 0 && stack[stack.Count - 1].Key >= ind)
+                {
+                    stack.RemoveAt(stack.Count - 1);
+                    popped = true;
+                }
+
+                Guard? pushed = null;
+                bool push = false;
+                if ((l.StartsWith("if ") || l.StartsWith("elseif ")) && l.EndsWith(" then"))
+                {
+                    push = true;
+                    string cond = l.Substring(l.IndexOf(' ') + 1, l.Length - l.IndexOf(' ') - 6);
+                    int eq = cond.IndexOf(" == ");
+                    if (eq > 0 && int.TryParse(cond.Substring(eq + 4), out int n)
+                        && vars.TryGetValue(cond.Substring(0, eq), out Guard v))
+                        pushed = new Guard { Kind = v.Kind, Name = v.Name, Value = n };
+                }
+                else if (l == "else")
+                {
+                    push = true;   // else 的條件是「前面都不成立」,當成可能
+                }
+                if (push)
+                    stack.Add(new KeyValuePair<int, Guard?>(ind, pushed));
+                if (push || popped)
+                    guards = stack.Where(x => x.Value.HasValue).Select(x => x.Value.Value).ToArray();
+                if (push)
+                    continue;
+
+                if (l.StartsWith("local ") && l.Contains(" = "))
+                {
+                    string name = l.Substring(6, l.IndexOf(" = ") - 6);
+                    string rhs = l.Substring(l.IndexOf(" = ") + 3);
+                    if (rhs.StartsWith("checkpointmanager.Switch(\""))
+                        vars[name] = new Guard { Kind = GuardKind.Switch, Name = Arg(rhs, 0) };
+                    else if (rhs.StartsWith("choose("))
+                    {
+                        vars[name] = new Guard { Kind = GuardKind.Choice, Name = name };
+                        chooses[name] = rhs.Substring(7, rhs.IndexOf(')') - 7);
+                    }
+                    else
+                        vars[name] = new Guard { Kind = GuardKind.Random, Name = name };
+                }
+
+                int b = l.IndexOf("] = ");
+                int open = l.IndexOf('[');
+                if (b > 0 && open > 0 && open < b && int.TryParse(l.Substring(open + 1, b - open - 1), out int idx))
+                {
+                    int q = l.IndexOf('"', b);
+                    int e = q < 0 ? -1 : l.IndexOf('"', q + 1);
+                    if (e > q)
+                    {
+                        string arr = l.Substring(0, open);
+                        if (!arrays.ContainsKey(arr))
+                            arrays[arr] = new Dictionary<int, string>();
+                        arrays[arr][idx] = l.Substring(q + 1, e - q - 1);
+                    }
+                }
+
+                Collect(l, "GetStoryText(\"", ItemKind.Key, guards, items);
+                Collect(l, "checkpointmanager.Position(\"", ItemKind.Position, guards, items);
+                foreach (string t in Transitions)
+                    Collect(l, t, ItemKind.Script, guards, items);
+            }
+
+            foreach (KeyValuePair<string, string> c in chooses)
+            {
+                if (!arrays.TryGetValue(c.Value, out Dictionary<int, string> arr))
+                    continue;
+                foreach (KeyValuePair<int, string> o in arr)
+                    script.Options[o.Value.TrimStart('~')] = new KeyValuePair<string, int>(c.Key, o.Key);
+            }
+            script.Items = items.ToArray();
+            return script;
+        }
+
+        // 一行裡 call( 之後第一個字串參數(SetTempScript(1, "x") 的 x 也算)
+        private static void Collect(string line, string call, ItemKind kind, Guard[] guards, List<Item> items)
+        {
+            for (int at = line.IndexOf(call); at >= 0; at = line.IndexOf(call, at + 1))
+            {
+                // 只看這次呼叫的括號內：SetNextScript(var1) 不能抓到同一行後面別的字串
+                string rest = line.Substring(at + call.Length - (call.EndsWith("\"") ? 1 : 0));
+                int close = rest.IndexOf(')');
+                string arg = Arg(close >= 0 ? rest.Substring(0, close) : rest, 0);
+                if (arg == null)
+                    continue;
+                if (kind != ItemKind.Key)
+                    arg = arg.ToLowerInvariant();
+                items.Add(new Item { Kind = kind, Value = arg, Guards = guards });
+            }
+        }
+
+        // s 裡第一個 "…" 的內容
+        private static string Arg(string s, int from)
+        {
+            int q = s.IndexOf('"', from);
+            int e = q < 0 ? -1 : s.IndexOf('"', q + 1);
+            return e > q ? s.Substring(q + 1, e - q - 1) : null;
+        }
     }
 
     internal static class Text
