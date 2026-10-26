@@ -92,6 +92,15 @@ namespace KnownUnknown
         public List<string> Locked = new List<string>();
     }
 
+    // 地圖上的一個入口：去哪個地點、在選單選哪一項，會抽到哪張事件表
+    internal class Place
+    {
+        public string Where;              // 「去伙房 →「掌廚」」
+        public FreePositionData Data;
+        public string Action;             // 通往事件表的選單選項(劇本原文);沒有選單 = null
+        public PositionResultData Table;
+    }
+
     // 依當下遊戲狀態算提示。
     internal class Hints
     {
@@ -354,14 +363,14 @@ namespace KnownUnknown
 
         private void AddPlaces(List<Hint> hints)
         {
-            foreach (KeyValuePair<string, PositionResultData> x in PlaceTables())
+            foreach (Place x in Places())
             {
-                Roll roll = RollOf(x.Value);
+                Roll roll = RollOf(x.Table);
                 if (!roll.Count.Any && roll.Locked.Count == 0)
                     continue;
                 hints.Add(new Hint
                 {
-                    Where = x.Key,
+                    Where = x.Where,
                     Chance = roll.Count.Any ? roll.Chance + "%" : "",
                     Detail = roll.Count.Any ? "沒看過的結果：" + string.Join("、", roll.Unseen) : "目前條件不足",
                     Rank = roll.Count.Any ? roll.Chance : -2,
@@ -373,7 +382,7 @@ namespace KnownUnknown
         }
 
         // 本旬地圖上點得到的地點事件表：「去伙房 →「掌廚」」→ 事件表。地點資料跟著地圖場景，只在地圖上查得到。
-        private IEnumerable<KeyValuePair<string, PositionResultData>> PlaceTables()
+        private IEnumerable<Place> Places()
         {
             foreach (FreePositionData place in Resources.FindObjectsOfTypeAll<FreePositionData>())
             {
@@ -387,11 +396,19 @@ namespace KnownUnknown
                     if (i.Kind != ItemKind.Position || !seen.Add(i.Value) || !_results.TryGetValue(i.Value, out PositionResultData pr))
                         continue;
                     string action = _index.ActionOf(i.Value);
-                    yield return new KeyValuePair<string, PositionResultData>(
-                        where + (action == null ? "" : $" →「{Text.OptionLabel(action)}」"), pr);
+                    yield return new Place
+                    {
+                        Where = where + (action == null ? "" : $" →「{Text.OptionLabel(action)}」"),
+                        Data = place,
+                        Action = action,
+                        Table = pr,
+                    };
                 }
             }
         }
+
+        // 事件表在地圖上的入口；本旬去不了 = null
+        public Place PlaceOf(PositionResultData table) => Places().FirstOrDefault(p => p.Table == table);
 
         // ---- 本旬拿得到、之後會解鎖白字的旗標 ----
 
@@ -412,17 +429,17 @@ namespace KnownUnknown
         // 本旬可以去的入口：(說明與可指定的結果, 劇本)。地點事件表每個機率 > 0 的結果、本旬的任務
         private IEnumerable<KeyValuePair<Outcome, string>> TurnEntries()
         {
-            foreach (KeyValuePair<string, PositionResultData> t in PlaceTables())
+            foreach (Place t in Places())
             {
-                List<KeyValuePair<PositionEventData, int>> events = Events(t.Value);
+                List<KeyValuePair<PositionEventData, int>> events = Events(t.Table);
                 int sum = events.Sum(x => x.Value);
                 foreach (KeyValuePair<PositionEventData, int> e in events)
                     yield return new KeyValuePair<Outcome, string>(new Outcome
                     {
-                        Table = t.Value,
+                        Table = t.Table,
                         Type = e.Key.ResultType,
-                        Label = $"{t.Key}抽到「{Label(e.Key)}」({100 * e.Value / sum}%)",
-                    }, ScriptOf(t.Value, e.Key));
+                        Label = $"{t.Where}抽到「{Label(e.Key)}」({100 * e.Value / sum}%)",
+                    }, ScriptOf(t.Table, e.Key));
             }
             foreach (MissionCheckData m in ActiveMissions())
                 yield return new KeyValuePair<Outcome, string>(new Outcome

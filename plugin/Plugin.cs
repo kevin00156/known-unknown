@@ -12,10 +12,11 @@ using Mortal.Core;
 using Mortal.Free;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.6.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.7.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -45,6 +46,11 @@ namespace KnownUnknown
         private readonly List<KeyValuePair<string, string>> _menuOptions = new List<KeyValuePair<string, string>>();   // (劇本, 選項)
         private readonly List<KeyValuePair<string, OptionHint>> _menuHints = new List<KeyValuePair<string, OptionHint>>();
 
+        // 在地圖上雙擊 = 直接去：替玩家點地點，選單出現時按下通往事件表的那個選項
+        private string _goAction;     // 等著按的選項(劇本原文)
+        private Button _goButton;
+        private float _goAt;
+
         private GUIStyle _small;
         private GUIStyle _windowStyle;
         private GUIStyle _picked;
@@ -66,7 +72,7 @@ namespace KnownUnknown
                 RefreshMenu();
             };
             _allowForce = Config.Bind("General", "AllowForce", true,
-                "在清單裡雙擊地點事件的結果 = 指定下次去那裡一定抽到它(再雙擊取消)。會改變遊戲結果，不想要就關掉");
+                "在清單裡雙擊地點事件的結果 = 指定下次去那裡一定抽到它(再雙擊取消);在地圖上雙擊會直接替你點地點、選行動。會改變遊戲結果，不想要就關掉");
             Force.Enabled = _allowForce.Value;
             _allowForce.SettingChanged += (_, __) => Force.Enabled = _allowForce.Value;
             Force.Log = m => Logger.LogInfo(m);
@@ -110,6 +116,13 @@ namespace KnownUnknown
             {
                 _show = !_show;
                 _signature = null;
+            }
+            // 選單剛跳出來就按，玩家看不到選單；等一下再按
+            if (_goButton != null && Time.unscaledTime >= _goAt)
+            {
+                if (_goButton.isActiveAndEnabled && _goButton.interactable)
+                    _goButton.onClick.Invoke();
+                _goButton = null;
             }
             if (_show && Time.unscaledTime >= _nextCheck)
             {
@@ -175,6 +188,9 @@ namespace KnownUnknown
         {
             _hints?.Capture();
             _signature = null;
+            // 回到地圖：這一趟結束了，沒按到的選項不再等
+            if (scene.name == "Free")
+                _goAction = null;
         }
 
         private void OnMenuStart(MenuDialog menu)
@@ -196,6 +212,12 @@ namespace KnownUnknown
             Plugin p = _instance;
             if (p == null || p._hints == null || !interactable || __instance != p._menu)
                 return;
+            if (p._goAction != null && text.TrimStart('~') == p._goAction.TrimStart('~'))
+            {
+                p._goButton = __instance.CachedButtons[Traverse.Create(__instance).Field("nextOptionIndex").GetValue<int>() - 1];
+                p._goAt = Time.unscaledTime + 0.6f;
+                p._goAction = null;
+            }
             string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
             p._menuOptions.Add(new KeyValuePair<string, string>(script, text));
             p.AddMenuHint(script, text);
@@ -227,6 +249,25 @@ namespace KnownUnknown
         }
 
         // 自由行動地圖(選地點的畫面)。跑劇情時 Free 場景還在，要看 FreeManager 是否正在處理
+        // 跟玩家自己點地圖同一條路(行動點、主線、支線任務照遊戲規則),所以不一定會去成
+        private void Go(Outcome o)
+        {
+            Place place = _hints.PlaceOf(o.Table);
+            PositionController pc = place == null ? null : Resources.FindObjectsOfTypeAll<PositionController>().FirstOrDefault(c =>
+                c.isActiveAndEnabled && Traverse.Create(c).Field("_positionData").GetValue<FreePositionData>() == place.Data);
+            if (pc == null)
+            {
+                Logger.LogWarning($"[前往] 地圖上找不到 {o.Table.name} 的入口");
+                return;
+            }
+            Logger.LogInfo($"[前往] {place.Where}");
+            _goAction = place.Action;
+            pc.OnPositionClick();
+            // 沒行動點、主線在別處：遊戲沒出發(地圖照樣可以點),不必再等選單
+            if (!FreeManager.Instance.IsProcessing)
+                _goAction = null;
+        }
+
         private static bool OnMap()
         {
             FreeManager f = FreeManager.Instance;
@@ -237,7 +278,8 @@ namespace KnownUnknown
         {
             if (!_show)
                 return;
-            if (_small == null)
+            // 換場景時遊戲會卸載沒人用的資源，背景貼圖被清掉視窗就變全透明
+            if (_small == null || _windowStyle.normal.background == null)
             {
                 // 預設 fontSize 是 0(=字型預設大小),不能拿來加減
                 _small = new GUIStyle(GUI.skin.label) { wordWrap = true };
@@ -246,6 +288,7 @@ namespace KnownUnknown
                 Texture2D bg = new Texture2D(1, 1);
                 bg.SetPixel(0, 0, new Color(0.08f, 0.08f, 0.08f, 0.94f));
                 bg.Apply();
+                bg.hideFlags = HideFlags.HideAndDontSave;
                 _windowStyle = new GUIStyle(GUI.skin.window);
                 _windowStyle.normal.background = bg;
                 _windowStyle.onNormal.background = bg;
@@ -278,6 +321,8 @@ namespace KnownUnknown
                 && GUILayoutUtility.GetLastRect().Contains(e.mousePosition))
             {
                 Force.Toggle(o);
+                if (Force.Is(o) && OnMap())
+                    Go(o);
                 e.Use();
             }
             foreach (string l in o.Locked)
@@ -292,6 +337,8 @@ namespace KnownUnknown
             if (o == null)
                 return "not found";
             Force.Toggle(o);
+            if (Force.Is(o) && OnMap())
+                Go(o);
             return Force.Is(o) ? "forced " + o.Label : "cleared";
         }
 
@@ -350,7 +397,7 @@ namespace KnownUnknown
             }
             GUILayout.EndScrollView();
             GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。"
-                + (_allowForce.Value ? "雙擊結果可以指定下次一定抽到它，再雙擊取消。" : ""), _small);
+                + (_allowForce.Value ? "雙擊結果 = 指定一定抽到它，在地圖上會直接帶你去；再雙擊取消。" : ""), _small);
             GUI.DragWindow();
         }
     }
