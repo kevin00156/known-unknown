@@ -439,6 +439,7 @@ def write_system_flags(game, path):
 # 引用到常駐資產(globalgamemanagers.assets:屬性、旗標、書…)的，用 類別+名字 接回遊戲裡的活物件。
 POSITION_FILE = "sharedassets2.assets"
 RESIDENT_FILE = "globalgamemanagers.assets"
+PRELOAD_ROOTS = ["PositionResultData", "SwitchResultData", "ConditionResultData"]
 SKIP_FIELDS = {"m_GameObject", "m_Enabled", "m_Script", "m_Name", "m_EditorHideFlags", "m_EditorClassIdentifier"}
 
 
@@ -446,7 +447,8 @@ def write_position_tables(game, path):
     a = Assets(game)
     resident = collections.Counter((a.cls[k], o.peek_name()) for k, o in a.objs.items() if k[0] == RESIDENT_FILE)
     ids, objects, externals, ext_ids = {}, [], [], {}
-    queue = [o for o in a.by_cls["PositionResultData"] if o.assets_file.name == POSITION_FILE]
+    # 地點事件表，加上劇本分支用的 Switch / Condition 表(地圖上缺了它們，分支會全當成可能成立)
+    queue = [o for c in PRELOAD_ROOTS for o in a.by_cls[c] if o.assets_file.name == POSITION_FILE]
 
     def ref(src, ptr):
         if not ptr["m_PathID"]:

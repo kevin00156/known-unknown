@@ -16,7 +16,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.10.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.11.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -32,7 +32,7 @@ namespace KnownUnknown
         private Thread _building;
         private Hints _hints;
 
-        // F8 視窗：開著時每秒比對遊戲狀態，有變才重算
+        // F2 視窗：開著時每秒比對遊戲狀態，有變才重算
         private bool _show;
         private Rect _window = new Rect(-1, 110, 720, 640);   // x < 0:第一次畫的時候放到右邊，避開左上角的狀態列
         private Vector2 _scroll;
@@ -46,7 +46,7 @@ namespace KnownUnknown
         private readonly List<KeyValuePair<string, string>> _menuOptions = new List<KeyValuePair<string, string>>();   // (劇本, 選項)
         private readonly List<KeyValuePair<string, OptionHint>> _menuHints = new List<KeyValuePair<string, OptionHint>>();
 
-        // 在地圖上雙擊 = 直接去：替玩家點地點，選單出現時按下通往事件表的那個選項
+        // 在地圖上勾選 = 直接去：替玩家點地點，選單出現時按下通往事件表的那個選項
         private string _goAction;     // 等著按的選項(劇本原文)
         private Button _goButton;
         private float _goAt;
@@ -58,16 +58,17 @@ namespace KnownUnknown
         private GUIStyle _small;
         private GUIStyle _windowStyle;
         private GUIStyle _picked;
+        private GUIStyle _check;
 
         private void Awake()
         {
             _instance = this;
-            // F3 是 LegendOfMortalMod 的選單鍵
-            _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "開關視窗(本旬去哪裡能看到白字；選單開著時也列出每個選項)");
+            // F3 是 LegendOfMortalMod 的選單鍵。F2 左手按得到，右手不用離開滑鼠
+            _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F2, "開關視窗(本旬去哪裡能看到白字；選單開著時也列出每個選項)");
             _countUnit = Config.Bind("General", "CountUnit", CountUnit.Both,
                 "白字怎麼算：Events = 幾段劇情(還有白字的事件/結果),Lines = 幾句台詞,Both = 兩個都顯示");
             _showLocked = Config.Bind("General", "ShowLocked", false,
-                "也列出現版本未開放的白字(條件永遠不會成立，例如沒有任何地方會設的旗標)。會劇透。角色條件還不夠的白字一律會列，標「條件不足」和需要的條件。視窗裡也能直接勾選");
+                "也列出現版本未開放的白字(條件永遠不會成立，例如沒有任何地方會設的旗標)，灰色。會劇透。角色條件還不夠的白字一律會列，橘色，附需要的條件。視窗裡也能直接勾選");
             Hints.ShowLocked = _showLocked.Value;
             _showLocked.SettingChanged += (_, __) =>
             {
@@ -77,7 +78,7 @@ namespace KnownUnknown
                 RefreshMenu();
             };
             _allowForce = Config.Bind("General", "AllowForce", true,
-                "在清單裡雙擊地點事件的結果 = 指定下次去那裡一定抽到它(再雙擊取消);在地圖上雙擊會直接替你點地點、選行動。會改變遊戲結果，不想要就關掉");
+                "清單裡結果旁邊的勾選框 = 指定下次去那裡一定抽到它(取消勾選 = 取消);在地圖上勾會直接替你點地點、選行動。擲骰也一樣。會改變遊戲結果，不想要就關掉");
             Force.Enabled = Dice.Enabled = _allowForce.Value;
             _allowForce.SettingChanged += (_, __) => Force.Enabled = Dice.Enabled = _allowForce.Value;
             Force.Log = Dice.Log = Preload.Log = m => Logger.LogInfo(m);
@@ -96,7 +97,7 @@ namespace KnownUnknown
             _harmony.Patch(addOption, postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterAddOption)));
             Force.Patch(_harmony);
             Dice.Patch(_harmony);
-            // IMGUI 視窗擋不住 EventSystem:沒擋的話，雙擊的第一下會穿過視窗點到後面的地點
+            // IMGUI 視窗擋不住 EventSystem:沒擋的話，點視窗會穿過去點到後面的地點
             foreach (string m in new[] { "OnPointerClick", "OnPointerEnter" })
                 _harmony.Patch(AccessTools.Method(typeof(PositionCollider), m),
                     prefix: new HarmonyMethod(typeof(Plugin), nameof(NotUnderWindow)));
@@ -189,7 +190,7 @@ namespace KnownUnknown
             {
                 Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {(h.Count.Any ? h.Count.ToString() : "")} | {h.Detail}");
                 foreach (string l in h.Locked)
-                    Logger.LogInfo($"[本旬]     {l}");
+                    Logger.LogInfo($"[本旬]     {Paint.Plain(l)}");
             }
         }
 
@@ -254,7 +255,7 @@ namespace KnownUnknown
                 if (hint == null)
                     return;
                 foreach (string l in hint.Locked)
-                    Logger.LogInfo($"[選單]   {l}");
+                    Logger.LogInfo($"[選單]   {Paint.Plain(l)}");
                 _menuHints.Add(new KeyValuePair<string, OptionHint>(Text.OptionLabel(text), hint));
             }
             catch (Exception e)
@@ -301,10 +302,10 @@ namespace KnownUnknown
             if (!_show)
                 return;
             // 換場景時遊戲會卸載沒人用的資源，背景貼圖被清掉視窗就變全透明
-            if (_small == null || _windowStyle.normal.background == null)
+            if (_small == null || _windowStyle.normal.background == null || _check.normal.background == null)
             {
                 // 預設 fontSize 是 0(=字型預設大小),不能拿來加減
-                _small = new GUIStyle(GUI.skin.label) { wordWrap = true };
+                _small = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = true };
                 _small.normal.textColor = new Color(0.8f, 0.8f, 0.8f);
                 // 預設視窗是半透明的，疊在遊戲畫面上讀不清楚
                 Texture2D bg = new Texture2D(1, 1);
@@ -314,8 +315,16 @@ namespace KnownUnknown
                 _windowStyle = new GUIStyle(GUI.skin.window);
                 _windowStyle.normal.background = bg;
                 _windowStyle.onNormal.background = bg;
-                _picked = new GUIStyle(GUI.skin.label) { wordWrap = true };
+                _picked = new GUIStyle(GUI.skin.label) { wordWrap = true, richText = true };
                 _picked.normal.textColor = new Color(1f, 0.85f, 0.3f);
+                // 指定用的勾選框：預設的太暗看不到。沒勾 = 金框，勾了 = 整格金色
+                _check = new GUIStyle
+                {
+                    fixedWidth = 16, fixedHeight = 16, margin = new RectOffset(4, 6, 4, 0),
+                    normal = { background = Box(false) }, onNormal = { background = Box(true) },
+                    hover = { background = Box(false) }, onHover = { background = Box(true) },
+                    active = { background = Box(true) }, onActive = { background = Box(true) },
+                };
             }
             float scale = Screen.height / 1080f;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
@@ -327,29 +336,47 @@ namespace KnownUnknown
         // 寫回設定檔；SettingChanged 會重算清單和選單
         private void ToggleLocked() => _showLocked.Value = !_showLocked.Value;
 
-        // 地點事件的一個結果；雙擊 = 指定下次抽到它
+        private static readonly Color Gold = new Color(1f, 0.8f, 0.2f);
+
+        private static Texture2D Box(bool filled)
+        {
+            const int n = 16;
+            Texture2D t = new Texture2D(n, n) { hideFlags = HideFlags.HideAndDontSave };
+            for (int x = 0; x < n; x++)
+            {
+                for (int y = 0; y < n; y++)
+                {
+                    bool edge = x < 2 || y < 2 || x >= n - 2 || y >= n - 2;
+                    t.SetPixel(x, y, filled || edge ? Gold : new Color(0, 0, 0, 0.6f));
+                }
+            }
+            t.Apply();
+            return t;
+        }
+
+        private bool Check(bool on) => GUILayout.Toggle(on, GUIContent.none, _check);
+
+        // 地點事件的一個結果；勾 = 指定下次抽到它，在地圖上就直接去。現在抽到也看不到白字的整行橘色
         private void DrawOutcome(Outcome o, string prefix)
         {
             bool on = Force.Is(o);
-            string note = o.Count.Any ? "" : "(條件不足，抽到也看不到)";
+            string label = prefix + o.Label;
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"    {(on ? "★ " : "")}{prefix}{o.Label}{note}", on ? _picked : _small, GUILayout.Width(550));
-            GUILayout.Label(o.Count.Any ? o.Count.ToString() : "", _small, GUILayout.Width(110));
-            GUILayout.EndHorizontal();
-            Event e = Event.current;
-            if (_allowForce.Value && o.Table != null && e.type == EventType.MouseDown && e.clickCount == 2
-                && GUILayoutUtility.GetLastRect().Contains(e.mousePosition))
+            GUILayout.Space(16);
+            if (_allowForce.Value && o.Table != null && Check(on) != on)
             {
                 Force.Toggle(o);
                 if (Force.Is(o) && OnMap())
                     Go(o);
-                e.Use();
             }
+            GUILayout.Label(o.Count.Any ? label : Paint.Color(Paint.Lacking, label), on ? _picked : _small, GUILayout.Width(510));
+            GUILayout.Label(o.Count.Any ? o.Count.ToString() : "", _small, GUILayout.Width(110));
+            GUILayout.EndHorizontal();
             foreach (string l in o.Locked)
-                GUILayout.Label("        " + l, _small);
+                GUILayout.Label("              " + l, _small);
         }
 
-        // 測試用(dev 插件 invoke):跟雙擊同一條路
+        // 測試用(dev 插件 invoke):跟勾選框同一條路
         private string ToggleForce(string table, string type)
         {
             Outcome o = _list.SelectMany(h => h.Outcomes).FirstOrDefault(x =>
@@ -362,7 +389,7 @@ namespace KnownUnknown
             return Force.Is(o) ? "forced " + o.Label : "cleared";
         }
 
-        // 測試用(dev 插件 invoke):跟擲骰那一列雙擊同一條路
+        // 測試用(dev 插件 invoke):跟擲骰那一列的勾選框同一條路
         private string ToggleDice(string k)
         {
             if (!Dice.Active)
@@ -387,7 +414,7 @@ namespace KnownUnknown
             GUILayout.Space(10);
         }
 
-        // 擲骰時：每個結果的機率、看到什麼；雙擊指定擲出它
+        // 擲骰時：每個結果的機率、看到什麼；勾 = 指定擲出它
         private void DrawDice()
         {
             if (_diceFor != Dice.Options)
@@ -398,7 +425,7 @@ namespace KnownUnknown
             }
             int[] faces = Dice.Faces();
             int total = faces.Sum();
-            GUILayout.Label("這次擲骰 — 機率、會看到" + (_allowForce.Value ? "(雙擊指定擲出它)" : ""));
+            GUILayout.Label("這次擲骰 — 機率、會看到");
             for (int i = 0; i < Dice.Options.Length; i++)
             {
                 int k = i + 1;
@@ -406,17 +433,14 @@ namespace KnownUnknown
                 bool on = Dice.Target == k;
                 string chance = faces[k] == 0 ? "擲不到" : $"{100 * faces[k] / Math.Max(total, 1)}%";
                 GUILayout.BeginHorizontal();
-                GUILayout.Label($"  {(on ? "★ " : "")}{Text.OptionLabel(Dice.Options[i])}", on ? _picked : GUI.skin.label, GUILayout.Width(330));
+                if (!_allowForce.Value || faces[k] == 0)
+                    GUILayout.Space(26);   // 跟勾選框同寬(16 + 左右邊界)
+                else if (Check(on) != on)
+                    Dice.Toggle(k);
+                GUILayout.Label(Text.OptionLabel(Dice.Options[i]), on ? _picked : GUI.skin.label, GUILayout.Width(304));
                 GUILayout.Label(chance, GUILayout.Width(60));
                 GUILayout.Label(h?.Text ?? "", h == null || h.Text == "已看完" ? _small : GUI.skin.label);
                 GUILayout.EndHorizontal();
-                Event e = Event.current;
-                if (_allowForce.Value && faces[k] > 0 && e.type == EventType.MouseDown && e.clickCount == 2
-                    && GUILayoutUtility.GetLastRect().Contains(e.mousePosition))
-                {
-                    Dice.Toggle(k);
-                    e.Use();
-                }
                 foreach (string l in h?.Locked ?? new List<string>())
                     GUILayout.Label("      " + l, _small);
             }
@@ -425,13 +449,16 @@ namespace KnownUnknown
 
         private void DrawWindow(int id)
         {
-            if (GUILayout.Toggle(_showLocked.Value, " 也顯示現版本未開放的劇情(會劇透)") != _showLocked.Value)
+            if (GUILayout.Toggle(_showLocked.Value, " 也顯示現版本未開放的劇情(灰色，會劇透)") != _showLocked.Value)
                 ToggleLocked();
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(560));
-            if (_allowForce.Value && Force.All.Any())
+            // 指定了、但現在清單上沒列的(條件變了、換旬了)才另外列，不然勾了就找不到地方取消
+            HashSet<string> listed = new HashSet<string>(_list.SelectMany(h => h.Outcomes).Where(Force.Is).Select(o => o.Table.name + "/" + o.Type));
+            List<Outcome> unlisted = Force.All.Where(o => !listed.Contains(o.Table.name + "/" + o.Type)).ToList();
+            if (_allowForce.Value && unlisted.Count > 0)
             {
-                GUILayout.Label("已指定(下次去就會抽到，雙擊取消):", _picked);
-                foreach (Outcome o in Force.All.ToList())
+                GUILayout.Label("已指定(清單上沒列出的):", _picked);
+                foreach (Outcome o in unlisted)
                     DrawOutcome(o, "");
                 GUILayout.Space(10);
             }
@@ -463,8 +490,6 @@ namespace KnownUnknown
                 }
             }
             GUILayout.EndScrollView();
-            GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。"
-                + (_allowForce.Value ? "雙擊結果 = 指定一定抽到它，在地圖上會直接帶你去；再雙擊取消。" : ""), _small);
             GUI.DragWindow();
         }
     }

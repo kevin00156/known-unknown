@@ -6,13 +6,14 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using HarmonyLib;
+using Mortal.Core;
 using Mortal.Story;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
 namespace KnownUnknown
 {
-    // 地點事件表在劇情場景的資產裡，沒進過劇情就不在記憶體。照 known_unknown.py --position-tables 抽出的資料
+    // 地點事件表、Switch/Condition 表在劇情場景的資產裡，沒進過劇情就不在記憶體。照 known_unknown.py --position-tables 抽出的資料
     // 重建一份：同檔的物件(事件、結果代碼、數值變數)新建，引用到常駐資產的(屬性、旗標、書…)接回遊戲裡的活物件，
     // 所以算出來的機率就是當下的真值。真的表載入後以真表為準，順便逐一比對機率當驗證。
     internal static class Preload
@@ -23,30 +24,54 @@ namespace KnownUnknown
         public static Action<string> Log = _ => { };
 
         private static readonly HashSet<Object> Copies = new HashSet<Object>();
-        private static List<PositionResultData> _tables;
+        private static List<ScriptableObject> _made;
 
         public static bool IsCopy(Object o) => Copies.Contains(o);
 
-        // 只建一次；建不出來(資料舊了、引用接不上)就回空的，照舊等進劇情
-        public static List<PositionResultData> Tables()
+        // 把遊戲裡的真表收進 into(真表優先，蓋掉複本時逐一比對);還沒有真表的名字先放複本。
+        // 不能看「一張都沒有」:Condition 表地圖場景也有十幾張(名字跟劇情場景的不重複)
+        public static void Merge<T>(Dictionary<string, T> into, Func<T, string> key, Func<T, T, int> mismatches, string what) where T : Object
         {
-            if (_tables != null)
-                return _tables;
+            int compared = 0, bad = 0;
+            foreach (T real in Resources.FindObjectsOfTypeAll<T>().Where(x => !IsCopy(x)))
+            {
+                string k = key(real);
+                if (into.TryGetValue(k, out T old) && IsCopy(old))
+                {
+                    compared++;
+                    bad += mismatches(old, real);
+                }
+                into[k] = real;
+            }
+            if (compared > 0)
+                Log($"[預載] 真的{what}載入，比對 {compared} 張：{(bad == 0 ? "全部一致" : bad + " 處不一致")}");
+            foreach (T c in Made().OfType<T>())
+            {
+                if (!into.ContainsKey(key(c)))
+                    into[key(c)] = c;
+            }
+        }
+
+        // 只建一次；建不出來(資料舊了、引用接不上)就回空的，照舊等進劇情
+        private static List<ScriptableObject> Made()
+        {
+            if (_made != null)
+                return _made;
             try
             {
-                _tables = Build();
+                _made = Build();
             }
             catch (Exception e)
             {
                 Log("[預載] 失敗，先等進劇情：" + e);
-                _tables = new List<PositionResultData>();
+                _made = new List<ScriptableObject>();
             }
-            return _tables;
+            return _made;
         }
 
-        private static List<PositionResultData> Build()
+        private static List<ScriptableObject> Build()
         {
-            List<PositionResultData> none = new List<PositionResultData>();
+            List<ScriptableObject> none = new List<ScriptableObject>();
             // 第一行 = 劇情場景資產檔大小；E<tab>類別<tab>名字 = 常駐物件；O<tab>完整類別<tab>名字<tab>JSON<tab>引用 = 要新建的
             string[][] lines;
             using (Stream st = typeof(Preload).Assembly.GetManifestResourceStream(Resource))
@@ -101,8 +126,9 @@ namespace KnownUnknown
                 Log($"[預載] 引用沒接上({linked}/{events}),先等進劇情");
                 return none;
             }
-            Log($"[預載] 重建 {tables.Count} 張地點事件表、{events} 個事件");
-            return tables;
+            Log($"[預載] 重建 {tables.Count} 張地點事件表、{events} 個事件、{made.OfType<SwitchResultData>().Count()} 張 Switch 表、"
+                + $"{made.OfType<ConditionResultData>().Count()} 張 Condition 表");
+            return made.ToList();
         }
 
         private static readonly Regex Segment = new Regex(@"^(\w+)(?:\[(\d+)\])?$");

@@ -180,7 +180,7 @@ namespace KnownUnknown
             return string.Join("、", s.Cast.Select(id => Text.Get("Character/" + id, id)).Distinct().Take(max));
         }
 
-        // 地點事件表若在選單分支裡，記下是哪個選項(F8 清單要寫「去正心堂 →「靜坐冥想」」)
+        // 地點事件表若在選單分支裡，記下是哪個選項(F2 清單要寫「去正心堂 →「靜坐冥想」」)
         private void IndexActions(Script s)
         {
             foreach (Item i in s.Items.Where(i => i.Kind == ItemKind.Position))

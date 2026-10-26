@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using HarmonyLib;
 using Mortal.Core;
 using Mortal.Free;
@@ -39,6 +40,17 @@ namespace KnownUnknown
             : $"{Events} 段・{Lines} 句";
     }
 
+    // 條件不足 / 現版本未開放用顏色分，不另外寫字(IMGUI rich text;日誌用 Plain 去掉)
+    internal static class Paint
+    {
+        public const string Lacking = "#E8A050";   // 條件不足：橘
+        public const string Closed = "#8C8C8C";    // 現版本未開放：灰
+
+        public static string Color(string color, string s) => $"<color={color}>{s}</color>";
+
+        public static string Plain(string s) => Regex.Replace(s, "</?color[^>]*>", "");
+    }
+
     // 一個入口的白字：現在走得到的，和被條件擋住的(原因 → 白字)
     internal class Outlook
     {
@@ -48,9 +60,9 @@ namespace KnownUnknown
 
         public Tally Count => new Tally(Open.Count > 0 ? 1 : 0, Open.Count);
 
-        // 「條件不足 1 段・3 句：小師妹好感 ≥ 20(目前 14)」;what 接在標籤後面(「抽到「其他」」)
+        // 「1 段・3 句：小師妹好感 ≥ 20(目前 14)」,橘 = 條件不足、灰 = 現版本未開放;what 放最前面(「抽到「其他」」)
         public IEnumerable<string> LockedLines(string what = "") =>
-            Locked.Select(x => $"{(Closed.Contains(x.Key) ? "未開放" : "條件不足")} {what}{new Tally(1, x.Value.Count)}:{x.Key}");
+            Locked.Select(x => Paint.Color(Closed.Contains(x.Key) ? Paint.Closed : Paint.Lacking, $"{what}{new Tally(1, x.Value.Count)}:{x.Key}"));
     }
 
     internal class Hint
@@ -80,10 +92,10 @@ namespace KnownUnknown
         public Tally Count;             // 每個還有白字的結果算一段
         public List<string> Unseen;     // 「失敗 25%(唐中翎)」
         public List<string> Locked;     // 「抽到「其他」1 段・3 句:…」
-        public List<Outcome> Outcomes;  // 還有白字(含未開放)的結果，F8 清單逐一列出、可以雙擊指定
+        public List<Outcome> Outcomes;  // 還有白字(含未開放)的結果，F2 清單逐一列出、可以勾選指定
     }
 
-    // 地點事件表的一個結果：雙擊指定的單位
+    // 地點事件表的一個結果：勾選指定的單位
     internal class Outcome
     {
         public PositionResultData Table;
@@ -135,25 +147,8 @@ namespace KnownUnknown
 
         public void Capture()
         {
-            int compared = 0, bad = 0;
-            foreach (PositionResultData p in Resources.FindObjectsOfTypeAll<PositionResultData>().Where(p => !Preload.IsCopy(p)))
-            {
-                string key = p.name.ToLowerInvariant();
-                if (_results.TryGetValue(key, out PositionResultData old) && Preload.IsCopy(old))
-                {
-                    compared++;
-                    bad += Preload.Mismatches(old, p, Rate);
-                }
-                _results[key] = p;
-            }
-            if (compared > 0)
-                Preload.Log($"[預載] 真表載入，比對 {compared} 張：{(bad == 0 ? "機率全部一致" : bad + " 個事件不一致")}");
-            if (_results.Count == 0)
-            {
-                foreach (PositionResultData p in Preload.Tables())
-                    _results[p.name.ToLowerInvariant()] = p;
-            }
             _cond.Capture();
+            Preload.Merge(_results, p => p.name.ToLowerInvariant(), (a, b) => Preload.Mismatches(a, b, Rate), "地點事件表");
         }
 
         // 有自己入口的劇本(任務起點)。算「後續劇情」時走到這裡就停，免得主線一路串到結局。
@@ -333,7 +328,7 @@ namespace KnownUnknown
             return hint;
         }
 
-        // ---- F8 清單 / 地圖提示：這一旬去哪裡能看到白字 ----
+        // ---- F2 清單 / 地圖提示：這一旬去哪裡能看到白字 ----
 
         public List<Hint> ForTurn()
         {

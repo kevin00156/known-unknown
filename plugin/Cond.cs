@@ -84,12 +84,21 @@ namespace KnownUnknown
         private Dictionary<FlagData, int> _assume;
 
         // 劇情場景裡才載入，抓到就留著引用
+        // 還沒進過劇情時用預載的複本(Preload)
         public void Capture()
         {
-            foreach (SwitchResultData s in Resources.FindObjectsOfTypeAll<SwitchResultData>())
-                _switches[s.name] = s;
-            foreach (ConditionResultData c in Resources.FindObjectsOfTypeAll<ConditionResultData>())
-                _conditions[c.name] = c;
+            Forget();
+            Preload.Merge(_conditions, c => c.name, (a, b) => Same(Evaluate(a), Evaluate(b), b.name), "Condition 表");
+            Preload.Merge(_switches, s => s.name, (a, b) => Same(Evaluate(a), Evaluate(b), b.name), "Switch 表");
+            Forget();
+        }
+
+        private static int Same<T>(T a, T b, string name)
+        {
+            if (Equals(a, b))
+                return 0;
+            Preload.Log($"[預載] {name}:複本 {a} vs 真表 {b}");
+            return 1;
         }
 
         // 遊戲狀態可能變了，清掉這次查詢的快取
@@ -110,32 +119,32 @@ namespace KnownUnknown
         {
             if (_switchMemo.TryGetValue(name, out int v))
                 return v;
-            v = -1;
-            if (_switches.TryGetValue(name, out SwitchResultData s))
-            {
-                if (UseCount(s))
-                {
-                    List<ValueCompareItem> counts = CountItems(s);
-                    int n = Count(s) + 1;
-                    int i = counts.FindIndex(c => GameStatUtils.StatCompare(n, CountValue(c), CountOp(c)));
-                    v = i >= 0 ? i + 1 : counts.Count + 1;
-                }
-                else
-                {
-                    List<ConditionResultItem> items = SwitchItems(s);
-                    int i = items.FindIndex(Eval);
-                    v = i >= 0 ? i + 1 : items.Count + 1;
-                }
-            }
+            v = _switches.TryGetValue(name, out SwitchResultData s) ? Evaluate(s) : -1;
             return _switchMemo[name] = v;
         }
+
+        private int Evaluate(SwitchResultData s)
+        {
+            if (UseCount(s))
+            {
+                List<ValueCompareItem> counts = CountItems(s);
+                int n = Count(s) + 1;
+                int i = counts.FindIndex(c => GameStatUtils.StatCompare(n, CountValue(c), CountOp(c)));
+                return i >= 0 ? i + 1 : counts.Count + 1;
+            }
+            List<ConditionResultItem> items = SwitchItems(s);
+            int k = items.FindIndex(Eval);
+            return k >= 0 ? k + 1 : items.Count + 1;
+        }
+
+        private bool Evaluate(ConditionResultData c) => ConditionItems(c).Any(Eval);
 
         // Condition 現在成不成立；null = 找不到
         public bool? Condition(string name)
         {
             if (_conditionMemo.TryGetValue(name, out bool? v))
                 return v;
-            v = _conditions.TryGetValue(name, out ConditionResultData c) ? ConditionItems(c).Any(Eval) : (bool?)null;
+            v = _conditions.TryGetValue(name, out ConditionResultData c) ? Evaluate(c) : (bool?)null;
             return _conditionMemo[name] = v;
         }
 
@@ -377,11 +386,11 @@ namespace KnownUnknown
             return v.name;
         }
 
-        // 備註有的是多行的開發筆記，只取第一行
+        // 備註有的是多行的開發筆記，只取第一行。約 1/6 的旗標遊戲沒寫備註，代號(B00001)對玩家沒意義，後面會接取得處
         public static string FlagName(FlagData f)
         {
             string note = (f.DevNote ?? "").Split('\n')[0].Trim();
-            return note.Length == 0 ? $"旗標 {f.name}" : $"旗標「{note}」";
+            return note.Length == 0 ? "未命名旗標" : $"旗標「{note}」";
         }
     }
 }
