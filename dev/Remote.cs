@@ -23,6 +23,8 @@ namespace KnownUnknownDev
     //   setstatic 型別 欄位 整數  設定靜態欄位
     //   dice 點數            之後所有 CheckPointManager.Dice 都用這個點數，dice 0 取消
     //   sw 名稱...            Switch 現在的值(只讀，同插件的算法)
+    //   setfield 型別 欄位 值  設定場景上第一個該型別元件的欄位(bool/int/string),例:setfield KnownUnknown.Plugin _show true
+    //   invoke 型別 方法 [字串參數...]  呼叫場景上第一個該型別元件的方法
     //   count 型別名          Resources.FindObjectsOfTypeAll 數量
     //   fields 型別名         第一個該型別物件的欄位(集合印數量)
     [BepInPlugin("known-unknown-dev", "多玩10塊錢-dev", "0.0.1")]
@@ -177,6 +179,27 @@ namespace KnownUnknownDev
                             }
                         sb.AppendLine($"{name} = {swv} (useCount={t2.Field("_useCount").GetValue()}, count={t2.Field("_count").GetValue()})");
                     }
+                    break;
+                case "setfield":
+                case "invoke":
+                    string[] fa = arg.Split(' ');
+                    Type ft = TypeOf(fa[0]);
+                    UnityEngine.Object target = Resources.FindObjectsOfTypeAll(ft).FirstOrDefault();   // BepInEx 插件物件是隱藏的
+                    if (target == null)
+                    {
+                        sb.AppendLine("沒有 " + fa[0]);
+                        break;
+                    }
+                    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+                    if (a[0] == "invoke")
+                    {
+                        object ret = ft.GetMethod(fa[1], flags).Invoke(target, fa.Skip(2).Cast<object>().ToArray());
+                        sb.AppendLine("ret " + ret);
+                        break;
+                    }
+                    var fi = ft.GetField(fa[1], flags);
+                    fi.SetValue(target, Convert.ChangeType(fa[2], fi.FieldType));
+                    sb.AppendLine("ok");
                     break;
                 case "count":
                     sb.AppendLine(Resources.FindObjectsOfTypeAll(TypeOf(arg)).Length.ToString());

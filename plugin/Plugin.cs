@@ -21,8 +21,6 @@ namespace KnownUnknown
         private static Plugin _instance;
 
         private ConfigEntry<KeyCode> _toggleKey;
-        private ConfigEntry<bool> _menuHints;
-        private ConfigEntry<bool> _mapHints;
         private ConfigEntry<CountUnit> _countUnit;
         private ConfigEntry<bool> _showLocked;
         private Harmony _harmony;
@@ -34,35 +32,36 @@ namespace KnownUnknown
 
         // F8 視窗：開著時每秒比對遊戲狀態，有變才重算
         private bool _show;
-        private Rect _window = new Rect(60, 60, 640, 560);
+        private Rect _window = new Rect(-1, 110, 720, 640);   // x < 0:第一次畫的時候放到右邊，避開左上角的狀態列
         private Vector2 _scroll;
         private List<Hint> _list = new List<Hint>();
         private string _summary = "";
         private string _signature;
         private float _nextCheck;
 
-        // 選單提示：選單出現時，每個選項選了會看到多少白字
+        // 選單提示：選單出現時，每個選項選了會看到多少白字。留著選項，切換「顯示未開放」時重算
         private MenuDialog _menu;
-        private readonly List<KeyValuePair<string, string>> _menuLines = new List<KeyValuePair<string, string>>();
+        private readonly List<KeyValuePair<string, string>> _menuOptions = new List<KeyValuePair<string, string>>();   // (劇本, 選項)
+        private readonly List<KeyValuePair<string, OptionHint>> _menuHints = new List<KeyValuePair<string, OptionHint>>();
 
         private GUIStyle _small;
+        private GUIStyle _windowStyle;
 
         private void Awake()
         {
             _instance = this;
             // F3 是 LegendOfMortalMod 的選單鍵
-            _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "開關「這一旬去哪裡能看到白字」視窗");
-            _menuHints = Config.Bind("General", "MenuHints", true, "選單出現時，顯示每個選項會看到多少白字");
-            _mapHints = Config.Bind("General", "MapHints", true, "在自由行動地圖上，顯示本旬去哪裡能看到白字");
+            _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "開關視窗(本旬去哪裡能看到白字；選單開著時也列出每個選項)");
             _countUnit = Config.Bind("General", "CountUnit", CountUnit.Both,
                 "白字怎麼算：Events = 幾段劇情(還有白字的事件/結果),Lines = 幾句台詞,Both = 兩個都顯示");
             _showLocked = Config.Bind("General", "ShowLocked", false,
-                "也列出目前條件不足的白字和需要的條件(好感、屬性、旗標從哪拿)。會劇透有哪些劇情。現版本拿不到的永遠不列");
+                "也列出目前條件不足的白字和需要的條件(好感、屬性、旗標從哪拿)。會劇透有哪些劇情。現版本拿不到的永遠不列。視窗裡也能直接勾選");
             Hints.ShowLocked = _showLocked.Value;
             _showLocked.SettingChanged += (_, __) =>
             {
                 Hints.ShowLocked = _showLocked.Value;
                 _signature = null;
+                RefreshMenu();
             };
             Tally.Unit = _countUnit.Value;
             _countUnit.SettingChanged += (_, __) =>
@@ -104,7 +103,7 @@ namespace KnownUnknown
                 _show = !_show;
                 _signature = null;
             }
-            if ((_show || OnMap()) && Time.unscaledTime >= _nextCheck)
+            if (_show && Time.unscaledTime >= _nextCheck)
             {
                 _nextCheck = Time.unscaledTime + 1;
                 RefreshIfChanged();
@@ -173,42 +172,50 @@ namespace KnownUnknown
         private void OnMenuStart(MenuDialog menu)
         {
             _menu = menu;
-            _menuLines.Clear();
+            _menuOptions.Clear();
+            _menuHints.Clear();
         }
 
         private void OnMenuEnd(MenuDialog menu)
         {
             if (menu == _menu)
-            {
-                _menu = null;
-                _menuLines.Clear();
-            }
+                OnMenuStart(null);
         }
 
         // 參數名要和原方法一致(text / interactable),Harmony 靠名字對應
         private static void AfterAddOption(MenuDialog __instance, string text, bool interactable)
         {
             Plugin p = _instance;
-            if (p == null || !p._menuHints.Value || p._hints == null || !interactable || __instance != p._menu)
+            if (p == null || p._hints == null || !interactable || __instance != p._menu)
                 return;
+            string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
+            p._menuOptions.Add(new KeyValuePair<string, string>(script, text));
+            p.AddMenuHint(script, text);
+        }
+
+        private void AddMenuHint(string script, string text)
+        {
             try
             {
-                string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
-                OptionHint hint = p._hints.ForOption(script, text);
-                p.Logger.LogInfo($"[選單] {script} | {text} → {hint?.Text ?? "(不認得)"} {hint?.Detail}");
+                OptionHint hint = _hints.ForOption(script, text);
+                Logger.LogInfo($"[選單] {script} | {text} → {hint?.Text ?? "(不認得)"} {hint?.Detail}");
                 if (hint == null)
                     return;
-                p._menuLines.Add(new KeyValuePair<string, string>(Text.OptionLabel(text), hint.Text));
                 foreach (string l in hint.Locked)
-                {
-                    p.Logger.LogInfo($"[選單]   未開放 {l}");
-                    p._menuLines.Add(new KeyValuePair<string, string>("", Locked + l));
-                }
+                    Logger.LogInfo($"[選單]   未開放 {l}");
+                _menuHints.Add(new KeyValuePair<string, OptionHint>(Text.OptionLabel(text), hint));
             }
             catch (Exception e)
             {
-                p.Logger.LogError(e);
+                Logger.LogError(e);
             }
+        }
+
+        private void RefreshMenu()
+        {
+            _menuHints.Clear();
+            foreach (KeyValuePair<string, string> o in _menuOptions)
+                AddMenuHint(o.Key, o.Value);
         }
 
         // 自由行動地圖(選地點的畫面)。跑劇情時 Free 場景還在，要看 FreeManager 是否正在處理
@@ -220,78 +227,57 @@ namespace KnownUnknown
 
         private void OnGUI()
         {
-            bool menu = _menu != null && _menu.IsActive() && _menuLines.Count > 0;
-            bool map = !menu && !_show && _mapHints.Value && _hints != null && OnMap();
-            if (!_show && !menu && !map)
+            if (!_show)
                 return;
             if (_small == null)
             {
                 // 預設 fontSize 是 0(=字型預設大小),不能拿來加減
                 _small = new GUIStyle(GUI.skin.label) { wordWrap = true };
                 _small.normal.textColor = new Color(0.8f, 0.8f, 0.8f);
+                // 預設視窗是半透明的，疊在遊戲畫面上讀不清楚
+                Texture2D bg = new Texture2D(1, 1);
+                bg.SetPixel(0, 0, new Color(0.08f, 0.08f, 0.08f, 0.94f));
+                bg.Apply();
+                _windowStyle = new GUIStyle(GUI.skin.window);
+                _windowStyle.normal.background = bg;
+                _windowStyle.onNormal.background = bg;
             }
             float scale = Screen.height / 1080f;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
-            if (menu)
-                DrawMenuHints();
-            if (map)
-                DrawMapHints();
-            if (_show)
-                _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢 — 這一旬去哪裡能看到白字");
+            if (_window.x < 0)
+                _window.x = Screen.width / scale - _window.width - 40;
+            _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢", _windowStyle);
         }
 
-        // 右上角小框，避開左上角的心相/行動列
         private const string Locked = "未開放 ";
 
-        // 右上角小框，高度跟著內容(條件說明會換行)
-        private void DrawBox(string title, List<KeyValuePair<string, string>> lines)
+        // 寫回設定檔；SettingChanged 會重算清單和選單
+        private void ToggleLocked() => _showLocked.Value = !_showLocked.Value;
+
+        // 選單開著時：每個選項選了會看到什麼
+        private void DrawMenu()
         {
-            float width = 600;
-            float right = Screen.width * 1080f / Screen.height;   // GUI.matrix 縮放後的畫面寬
-            GUILayout.BeginArea(new Rect(right - width - 20, 150, width, 1080 - 200));
-            GUILayout.BeginVertical(GUI.skin.box);
-            GUILayout.Label(title);
-            foreach (KeyValuePair<string, string> l in lines)
+            GUILayout.Label("這個選單 — 選了會看到");
+            foreach (KeyValuePair<string, OptionHint> o in _menuHints)
             {
-                // 沒有標籤的列(未開放的說明)佔滿整行
-                if (l.Key.Length == 0)
-                {
-                    GUILayout.Label("    " + l.Value, _small);
-                    continue;
-                }
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(l.Key, GUILayout.Width(200));
-                GUILayout.Label(l.Value, l.Value == "已看完" ? _small : GUI.skin.label);
+                GUILayout.Label("  " + o.Key, GUILayout.Width(220));
+                GUILayout.Label(o.Value.Text, o.Value.Text == "已看完" ? _small : GUI.skin.label);
                 GUILayout.EndHorizontal();
+                foreach (string l in o.Value.Locked)
+                    GUILayout.Label("      " + Locked + l, _small);
             }
-            GUILayout.EndVertical();
-            GUILayout.EndArea();
-        }
-
-        private void DrawMenuHints()
-        {
-            DrawBox("多玩10塊錢 — 選了會看到", _menuLines);
-        }
-
-        // 地圖上只列機率最高的幾個，完整清單按 F8
-        private void DrawMapHints()
-        {
-            List<KeyValuePair<string, string>> lines = _list.Where(h => h.Rank >= 0).Take(6)
-                .Select(h => new KeyValuePair<string, string>(h.Where, $"{h.Chance} {h.Count}")).ToList();
-            // 本旬拿得到、之後會解鎖白字的旗標(ShowLocked 才有)
-            lines.AddRange(_list.Where(h => h.Flag).Take(3)
-                .Select(h => new KeyValuePair<string, string>("", $"{h.Where} → 之後 {h.Count}:{h.Detail}")));
-            if (!_hints.HasResults)
-                lines.Add(new KeyValuePair<string, string>("地點機率要等進過一次地點才算得出來", ""));
-            else if (lines.Count == 0)
-                lines.Add(new KeyValuePair<string, string>("本旬各地點都看完了", ""));
-            DrawBox($"多玩10塊錢 — 本旬白字(完整清單按 {_toggleKey.Value})", lines);
+            GUILayout.Space(10);
         }
 
         private void DrawWindow(int id)
         {
-            GUILayout.Label(_summary);
-            _scroll = GUILayout.BeginScrollView(_scroll);
+            if (GUILayout.Toggle(_showLocked.Value, " 顯示未開放劇情和需要的條件(會劇透)") != _showLocked.Value)
+                ToggleLocked();
+            _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(560));
+            if (_menu != null && _menu.IsActive() && _menuHints.Count > 0)
+                DrawMenu();
+            GUILayout.Label("本旬 — " + _summary);
             if (_hints != null && !_hints.HasResults)
                 GUILayout.Label("地點事件表跟著劇情場景載入，進過一次地點後才算得出各地點機率。");
             else if (_list.Count == 0 && _hints != null)
@@ -309,7 +295,7 @@ namespace KnownUnknown
                     GUILayout.Label("    " + Locked + l, _small);
             }
             GUILayout.EndScrollView();
-            GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。");
+            GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。", _small);
             GUI.DragWindow();
         }
     }
