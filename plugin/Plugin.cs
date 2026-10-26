@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.Mono;
@@ -28,7 +30,9 @@ namespace KnownUnknown
         private bool _show;
         private Rect _window = new Rect(60, 60, 620, 560);
         private Vector2 _scroll;
-        private StoryIndex _index;
+        private volatile StoryIndex _index;
+        private Thread _building;
+        private bool _refreshWhenBuilt;
         private List<Hint> _hints = new List<Hint>();
         private string _summary = "";
         private GUIStyle _small;
@@ -42,11 +46,37 @@ namespace KnownUnknown
 
         private void Update()
         {
+            if (_refreshWhenBuilt && _index != null)
+            {
+                _refreshWhenBuilt = false;
+                Refresh();
+            }
             if (!Input.GetKeyDown(_toggleKey.Value))
                 return;
             _show = !_show;
             if (_show)
                 Refresh();
+        }
+
+        // 讀劇本要用 Unity API(主執行緒),解析 65MB 劇本丟背景，建好後 Update 自動刷新
+        private void StartBuild()
+        {
+            KeyValuePair<string, string>[] scripts = StoryIndex.Load();
+            _building = new Thread(() =>
+            {
+                try
+                {
+                    _index = new StoryIndex(scripts);
+                }
+                catch (Exception e)
+                {
+                    Logger.LogError(e);
+                }
+            })
+            {
+                IsBackground = true,
+            };
+            _building.Start();
         }
 
         private void Refresh()
@@ -58,7 +88,13 @@ namespace KnownUnknown
                 return;
             }
             if (_index == null)
-                _index = new StoryIndex();
+            {
+                if (_building == null)
+                    StartBuild();
+                _refreshWhenBuilt = true;
+                _summary = "第一次開啟，正在整理劇本(約幾秒)…";
+                return;
+            }
 
             List<FreePositionData> places = Resources.FindObjectsOfTypeAll<FreePositionData>().ToList();
             List<MissionCheckData> missions = Resources.FindObjectsOfTypeAll<MissionCheckData>().ToList();
@@ -185,7 +221,11 @@ namespace KnownUnknown
             if (!_show)
                 return;
             if (_small == null)
-                _small = new GUIStyle(GUI.skin.label) { fontSize = GUI.skin.label.fontSize - 2 };
+            {
+                // 預設 fontSize 是 0(=字型預設大小),不能拿來加減
+                _small = new GUIStyle(GUI.skin.label);
+                _small.normal.textColor = new Color(0.8f, 0.8f, 0.8f);
+            }
             float scale = Screen.height / 1080f;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
             _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢 — 這一旬去哪裡能看到白字");

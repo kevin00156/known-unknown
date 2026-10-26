@@ -10,6 +10,7 @@ using UnityEngine;
 namespace KnownUnknown
 {
     // 劇本 → 台詞 key、劇本之間的字串引用。遊戲啟動後建一次就好，內容不會變。
+    // 劇本共 65MB,Unity 的 Mono 正規表示式很慢：讀檔(Load)在主執行緒，解析(建構子)丟背景執行緒。
     internal class StoryIndex
     {
         // LuaManager 從 Resources 的 Story/ChineseTraditional/<劇本> 載入；Resources 路徑不分大小寫，一律小寫
@@ -27,17 +28,26 @@ namespace KnownUnknown
 
         // checkpointmanager.Position("X") 的 X(小寫) -> 選單上那個選項的在地化 key
         private readonly Dictionary<string, string> _actions = new Dictionary<string, string>();
-        private static readonly Regex OptionRe = new Regex("\\w+\\[(\\d+)\\]\\s*=\\s*[^\"\\n]*\"([^\"]+)\"");
+        private static readonly Regex OptionRe = new Regex("(?m)^[ \\t]*[a-z_0-9]+\\[(\\d+)\\] = [^\"\\n]*\"([^\"\\n]+)\"");
         private static readonly Regex BranchRe = new Regex("choice_\\w+ == (\\d+)|checkpointmanager\\.Position\\(\"([^\"]+)\"\\)");
 
         public int TotalKeys { get; private set; }
 
-        public StoryIndex()
+        // 只能在主執行緒呼叫(Unity API)
+        public static KeyValuePair<string, string>[] Load()
         {
-            foreach (TextAsset asset in Resources.LoadAll<TextAsset>(ScriptFolder))
+            return Resources.LoadAll<TextAsset>(ScriptFolder)
+                .Select(a => new KeyValuePair<string, string>(a.name.ToLowerInvariant(), a.text))
+                .ToArray();
+        }
+
+        // 純字串處理，可在背景執行緒跑
+        public StoryIndex(KeyValuePair<string, string>[] scripts)
+        {
+            foreach (KeyValuePair<string, string> script in scripts)
             {
-                string name = asset.name.ToLowerInvariant();
-                string text = asset.text;
+                string name = script.Key;
+                string text = script.Value;
                 List<string> keys = new List<string>();
                 foreach (Match m in KeyRe.Matches(text))
                     keys.Add(m.Groups[1].Value);
@@ -53,7 +63,9 @@ namespace KnownUnknown
                 }
                 _cast[name] = cast.OrderByDescending(x => x.Value).Select(x => x.Key).ToArray();
                 Keys[name] = keys.ToArray();
-                IndexActions(text);
+                // 選單表的正規表示式最貴(全掃要 20 秒),只有同時有選單和地點事件的劇本才需要
+                if (text.Contains("choose(") && text.Contains("checkpointmanager.Position("))
+                    IndexActions(text);
                 _refs[name] = refs.ToArray();
                 TotalKeys += keys.Count;
             }
