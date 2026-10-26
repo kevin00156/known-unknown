@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>KnownUnknown</AssemblyName>
+    <RootNamespace>KnownUnknown</RootNamespace>
+    <Version>0.1.0</Version>
+    <DebugType>none</DebugType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
+    <!-- 遊戲安裝目錄；遊戲 DLL 直接從這裡引用，不進 repo -->
+    <GamePath Condition="'$(GamePath)' == ''">$(HOME)/.steam/debian-installation/steamapps/common/LegendOfMortal</GamePath>
+    <Managed>$(GamePath)/Mortal_Data/Managed</Managed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 只拿 API;執行期用遊戲裡裝的 BepInEx(be.789) -->
+    <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.697" IncludeAssets="compile" />
+    <PackageReference Include="UnityEngine.Modules" Version="2020.3.49" IncludeAssets="compile" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="$(Managed)/Mortal.Core.dll" Private="false" />
+    <Reference Include="$(Managed)/Mortal.Story.dll" Private="false" />
+    <Reference Include="$(Managed)/Mortal.Free.dll" Private="false" />
+    <Reference Include="$(Managed)/OBB.Framework.dll" Private="false" />
+  </ItemGroup>
+</Project>
