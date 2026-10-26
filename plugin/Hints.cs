@@ -21,23 +21,38 @@ namespace KnownUnknown
     {
         public int Events;
         public int Lines;
+        public int Ends;     // 汗青書(結局)
+        public int Deaths;   // 生死簿
 
         public static CountUnit Unit = CountUnit.Both;
 
-        public Tally(int events, int lines)
+        public Tally(int events, int lines, int ends = 0, int deaths = 0)
         {
             Events = events;
             Lines = lines;
+            Ends = ends;
+            Deaths = deaths;
         }
 
-        public static Tally operator +(Tally a, Tally b) => new Tally(a.Events + b.Events, a.Lines + b.Lines);
+        // 一堆沒看過的 key(台詞 + 講經堂項目)算成幾句、幾個結局、幾個死亡
+        public static Tally Of(int events, ICollection<string> keys)
+        {
+            int ends = keys.Count(k => k.StartsWith(Library.End)), deaths = keys.Count(k => k.StartsWith(Library.Dead));
+            return new Tally(events, keys.Count - ends - deaths, ends, deaths);
+        }
 
-        public bool Any => Lines > 0;
+        public static Tally operator +(Tally a, Tally b) =>
+            new Tally(a.Events + b.Events, a.Lines + b.Lines, a.Ends + b.Ends, a.Deaths + b.Deaths);
 
-        public override string ToString() =>
-            Unit == CountUnit.Events ? $"{Events} 段"
-            : Unit == CountUnit.Lines ? $"{Lines} 句"
-            : $"{Events} 段・{Lines} 句";
+        public bool Any => Lines + Ends + Deaths > 0;
+
+        public override string ToString()
+        {
+            string s = Unit == CountUnit.Events ? $"{Events} 段"
+                : Unit == CountUnit.Lines ? $"{Lines} 句"
+                : $"{Events} 段・{Lines} 句";
+            return s + (Ends > 0 ? $"・汗青書 {Ends}" : "") + (Deaths > 0 ? $"・生死簿 {Deaths}" : "");
+        }
     }
 
     // 條件不足 / 現版本未開放用顏色分，不另外寫字(IMGUI rich text;日誌用 Plain 去掉)
@@ -58,11 +73,11 @@ namespace KnownUnknown
         public readonly Dictionary<string, HashSet<string>> Locked = new Dictionary<string, HashSet<string>>();
         public readonly HashSet<string> Closed = new HashSet<string>();   // Locked 裡現版本拿不到的原因
 
-        public Tally Count => new Tally(Open.Count > 0 ? 1 : 0, Open.Count);
+        public Tally Count => Tally.Of(Open.Count > 0 ? 1 : 0, Open);
 
         // 「1 段・3 句：小師妹好感 ≥ 20(目前 14)」,橘 = 條件不足、灰 = 現版本未開放;what 放最前面(「抽到「其他」」)
         public IEnumerable<string> LockedLines(string what = "") =>
-            Locked.Select(x => Paint.Color(Closed.Contains(x.Key) ? Paint.Closed : Paint.Lacking, $"{what}{new Tally(1, x.Value.Count)}:{x.Key}"));
+            Locked.Select(x => Paint.Color(Closed.Contains(x.Key) ? Paint.Closed : Paint.Lacking, $"{what}{Tally.Of(1, x.Value)}:{x.Key}"));
     }
 
     internal class Hint
@@ -167,7 +182,7 @@ namespace KnownUnknown
             Outlook o = new Outlook();
             foreach (KeyValuePair<Item, Guard[]> x in all)
             {
-                if (x.Key.Kind != ItemKind.Key || ReadStorySystem.Instance.ExistKey(x.Key.Value) || o.Open.Contains(x.Key.Value))
+                if (!StoryIndex.Seeable(x.Key.Kind) || Game.Seen(x.Key.Value) || o.Open.Contains(x.Key.Value))
                     continue;
                 List<Guard> blockers = x.Value.Where(g => Blocks(g, inStory)).Distinct().ToList();
                 if (blockers.Count == 0)
@@ -304,7 +319,7 @@ namespace KnownUnknown
             List<Outlook> looks = new List<Outlook>();
             foreach (Item i in s.Items.Where(i => i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == pick.Key && g.Value == pick.Value)))
             {
-                if (i.Kind == ItemKind.Key || i.Kind == ItemKind.Flag)
+                if (StoryIndex.Seeable(i.Kind) || i.Kind == ItemKind.Flag)
                     inline.Add(new KeyValuePair<Item, Guard[]>(i, i.Guards));
                 else if (i.Kind == ItemKind.Script)
                     looks.Add(Look(_index.Paths(i.Value).Select(x =>
@@ -529,7 +544,7 @@ namespace KnownUnknown
             {
                 List<KeyValuePair<Item, Guard[]>> all = _index.Paths(root).ToList();
                 HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
-                foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => x.Key.Kind == ItemKind.Key))
+                foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => StoryIndex.Seeable(x.Key.Kind)))
                 {
                     HashSet<string> flags = new HashSet<string>(x.Value.SelectMany(Names));
                     if (flags.Count > 0)
@@ -569,7 +584,7 @@ namespace KnownUnknown
 
             // 現在被擋住、跟這些旗標有關的白字
             List<Gated> blocked = _gated.Where(g => g.Flags.Overlaps(writes.Keys.Select(f => f.name))
-                && !ReadStorySystem.Instance.ExistKey(g.Key) && g.Guards.Any(x => Blocks(x, g.InStory))).ToList();
+                && !Game.Seen(g.Key) && g.Guards.Any(x => Blocks(x, g.InStory))).ToList();
             List<KeyValuePair<string, MissionCheckData>> pending = PendingMissions().Where(m => !MissionReady(m.Value)).ToList();
 
             foreach (KeyValuePair<FlagData, Dictionary<int, List<Outcome>>> w in writes)
@@ -589,7 +604,7 @@ namespace KnownUnknown
                     foreach (KeyValuePair<string, MissionCheckData> m in pending.Where(m => MissionReady(m.Value)))
                     {
                         string start = m.Value.StartScript.ToLowerInvariant();
-                        HashSet<string> keys = new HashSet<string>(_index.Keys(start, _ => true).Where(k => !ReadStorySystem.Instance.ExistKey(k)));
+                        HashSet<string> keys = new HashSet<string>(_index.Keys(start, _ => true).Where(k => !Game.Seen(k)));
                         if (keys.Count == 0)
                             continue;
                         unlocked[start] = keys;
@@ -601,7 +616,7 @@ namespace KnownUnknown
                     _cond.Assume(null);
                     if (unlocked.Count == 0)
                         continue;
-                    Tally count = new Tally(unlocked.Count, unlocked.Values.Sum(k => k.Count));
+                    Tally count = unlocked.Values.Aggregate(new Tally(), (a, k) => a + Tally.Of(1, k));
                     hints.Add(new Hint
                     {
                         Where = $"拿{Cond.FlagName(w.Key)}",

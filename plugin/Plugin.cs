@@ -19,7 +19,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.11.2")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.12.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -188,7 +188,9 @@ namespace KnownUnknown
             _list = _hints.ForTurn();
             int unread = Game.Unread(_index.AllKeys);
             int total = _index.TotalKeys;
-            _summary = $"全部台詞已讀 {total - unread}/{total}({100f * (total - unread) / total:F1}%),白字 {unread} 句";
+            LibrarySystem lib = LibrarySystem.Instance;
+            _summary = $"全部台詞已讀 {total - unread}/{total}({100f * (total - unread) / total:F1}%),白字 {unread} 句;"
+                + $"汗青書 {lib.EndGame.List.Count(x => x.Count > 0)}/{lib.EndGame.List.Count}、生死簿 {lib.Dead.List.Count(x => x.Count > 0)}/{lib.Dead.List.Count}";
             // 寫進 BepInEx 日誌，方便對照驗證
             Logger.LogInfo($"[本旬] {t.Year}年{t.Month}月{t.Stage} " + _summary + (_hints.HasResults ? "" : "(尚無地點事件表)"));
             foreach (Hint h in _list)
@@ -420,6 +422,25 @@ namespace KnownUnknown
             if (Force.Is(o) && OnMap())
                 Go(o);
             return Force.Is(o) ? "forced " + o.Label : "cleared";
+        }
+
+        // 測試用(dev 插件 invoke):某劇本某選項的提示(跟選單同一條路)
+        private string OptionTest(string script, string option)
+        {
+            OptionHint h = _hints.ForOption(script, option);
+            return h == null ? "null" : h.Text + " | " + string.Join(" / ", h.Locked.Select(Paint.Plain));
+        }
+
+        // 測試用(dev 插件 invoke):劇本裡抓到的講經堂項目，和講經堂實際收錄的對照
+        private string LibraryTest()
+        {
+            List<string> keys = _index.LibraryKeys.ToList();
+            LibrarySystem lib = LibrarySystem.Instance;
+            int ends = keys.Count(k => k.StartsWith(Library.End)), deaths = keys.Count(k => k.StartsWith(Library.Dead));
+            int seenEnds = keys.Count(k => k.StartsWith(Library.End) && Game.Seen(k)), seenDeaths = keys.Count(k => k.StartsWith(Library.Dead) && Game.Seen(k));
+            int unknown = keys.Count(k => (k.StartsWith(Library.End) ? lib.EndGame : lib.Dead).Get(k.Substring(k.IndexOf(':') + 1)) == null);
+            return $"汗青書 劇本 {ends} 個(已收 {seenEnds}) 生死簿 劇本 {deaths} 個(已收 {seenDeaths}) 講經堂查不到 {unknown};"
+                + $" 講經堂實際：汗青書 {lib.EndGame.List.Count(x => x.Count > 0)} 生死簿 {lib.Dead.List.Count(x => x.Count > 0)}; 例 {string.Join(",", keys.Take(4))}";
         }
 
         // 測試用(dev 插件 invoke):把視窗移到滑鼠底下 / 移開，看遊戲的滑鼠輸入有沒有關掉

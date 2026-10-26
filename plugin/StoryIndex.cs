@@ -37,6 +37,7 @@ namespace KnownUnknown
         Script,    // SetNextScript / SetCurrentStoryScript / SetCurrentTravelScript / SetTempScript
         Position,  // checkpointmanager.Position("X"):地點事件表，執行時才抽出結果劇本
         Flag,      // statmodifymanager.SetFlag("F", n) / AddFlag("F", n)
+        Library,   // 講經堂：endgamepanel.Open("20001") = 汗青書「end:20001」;ChangeScene("GameOver", "10023") = 生死簿「dead:10023」
     }
 
     internal struct Item
@@ -173,7 +174,13 @@ namespace KnownUnknown
         }
 
         public IEnumerable<string> Keys(string start, Func<Guard[], bool> ok) =>
-            Walk(start, ok).Where(i => i.Kind == ItemKind.Key).Select(i => i.Value).Distinct();
+            Walk(start, ok).Where(i => Seeable(i.Kind)).Select(i => i.Value).Distinct();
+
+        public IEnumerable<string> LibraryKeys =>
+            _scripts.Values.SelectMany(s => s.Items).Where(i => i.Kind == ItemKind.Library).Select(i => i.Value).Distinct();
+
+        // 看過 / 沒看過的單位：台詞，和講經堂的結局、死亡
+        public static bool Seeable(ItemKind k) => k == ItemKind.Key || k == ItemKind.Library;
 
         public string ActionOf(string positionResult) =>
             _actions.TryGetValue(positionResult, out string a) ? a : null;
@@ -308,6 +315,8 @@ namespace KnownUnknown
                     roll = l.Substring(er + execRoll.Length).Split(',')[0].Trim();
 
                 Collect(l, "GetStoryText(\"", ItemKind.Key, guards, items);
+                CollectLibrary(l, "endgamepanel.Open(\"", Library.End, guards, items);
+                CollectLibrary(l, "luamanager.ChangeScene(\"GameOver\", \"", Library.Dead, guards, items);
                 Collect(l, "checkpointmanager.Position(\"", ItemKind.Position, guards, items);
                 CollectFlag(l, "statmodifymanager.SetFlag(\"", false, guards, items);
                 CollectFlag(l, "statmodifymanager.AddFlag(\"", true, guards, items);
@@ -341,6 +350,14 @@ namespace KnownUnknown
                     arg = arg.ToLowerInvariant();
                 items.Add(new Item { Kind = kind, Value = arg, Guards = guards });
             }
+        }
+
+        private static void CollectLibrary(string line, string call, string prefix, Guard[] guards, List<Item> items)
+        {
+            int at = line.IndexOf(call);
+            string id = at < 0 ? null : Arg(line.Substring(at + call.Length - 1), 0);
+            if (id != null)
+                items.Add(new Item { Kind = ItemKind.Library, Value = prefix + id, Guards = guards });
         }
 
         // SetFlag("F", 1) / AddFlag("F", -1);數字不是常數(SetFlag("F", var1))就不記
@@ -393,8 +410,32 @@ namespace KnownUnknown
         }
     }
 
+    // 講經堂項目的 key 前綴
+    internal static class Library
+    {
+        public const string End = "end:";    // 汗青書
+        public const string Dead = "dead:";  // 生死簿(講經堂內部叫奪命譜)
+    }
+
     internal static class Game
     {
+        // 看過了沒：台詞問已讀表；結局、死亡問講經堂(次數 > 0 = 已收錄)
+        public static bool Seen(string key)
+        {
+            if (key.StartsWith(Library.End))
+                return Collected(LibrarySystem.Instance.EndGame, key.Substring(Library.End.Length));
+            if (key.StartsWith(Library.Dead))
+                return Collected(LibrarySystem.Instance.Dead, key.Substring(Library.Dead.Length));
+            return ReadStorySystem.Instance.ExistKey(key);
+        }
+
+        // 講經堂沒有這一項(插件不認得的 id)就當收過，不提示
+        private static bool Collected(LibraryItemCollection c, string id)
+        {
+            LibraryItemData d = c.Get(id);
+            return d == null || d.Count > 0;
+        }
+
         public static bool Ready()
         {
             ReadStorySystem rs = ReadStorySystem.Instance;
