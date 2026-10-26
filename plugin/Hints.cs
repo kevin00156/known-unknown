@@ -61,6 +61,7 @@ namespace KnownUnknown
         public Tally Count;
         public List<string> Locked = new List<string>();   // 條件不足的白字(ShowLocked 才有)
         public bool Flag;      // 「本旬拿得到、之後解鎖白字」的旗標提示
+        public List<Outcome> Outcomes = new List<Outcome>();   // 地點：各結果；旗標：取得處
     }
 
     // 選單上一個選項的提示
@@ -74,10 +75,21 @@ namespace KnownUnknown
     // 地點事件表抽一次的結果
     internal struct Roll
     {
-        public int Chance;           // 抽到還有白字的結果的機率(%)
-        public Tally Count;          // 每個還有白字的結果算一段
-        public List<string> Unseen;  // 「失敗 25%(唐中翎)」
-        public List<string> Locked;  // 「抽到「其他」1 段・3 句:…」
+        public int Chance;              // 抽到還有白字的結果的機率(%)
+        public Tally Count;             // 每個還有白字的結果算一段
+        public List<string> Unseen;     // 「失敗 25%(唐中翎)」
+        public List<string> Locked;     // 「抽到「其他」1 段・3 句:…」
+        public List<Outcome> Outcomes;  // 還有白字(含未開放)的結果，F8 清單逐一列出、可以雙擊指定
+    }
+
+    // 地點事件表的一個結果：雙擊指定的單位
+    internal class Outcome
+    {
+        public PositionResultData Table;
+        public string Type;                  // 結果代碼(ResultType)
+        public string Label;                 // 「抽到「其他」18%」或旗標的取得處
+        public Tally Count;                  // 現在看得到的白字
+        public List<string> Locked = new List<string>();
     }
 
     // 依當下遊戲狀態算提示。
@@ -190,13 +202,23 @@ namespace KnownUnknown
         {
             List<KeyValuePair<PositionEventData, int>> events = Events(pr);
             int sum = events.Sum(x => x.Value);
-            Roll roll = new Roll { Unseen = new List<string>(), Locked = new List<string>() };
+            Roll roll = new Roll { Unseen = new List<string>(), Locked = new List<string>(), Outcomes = new List<Outcome>() };
             int hit = 0;
             foreach (KeyValuePair<PositionEventData, int> x in events)
             {
                 string script = ScriptOf(pr, x.Key);
                 Outlook o = Look(script);
                 roll.Locked.AddRange(o.LockedLines.Select(l => $"抽到「{Label(x.Key)}」{l}"));
+                string cast0 = _index.Cast(script, 2);
+                if (o.Open.Count > 0 || o.Locked.Count > 0)
+                    roll.Outcomes.Add(new Outcome
+                    {
+                        Table = pr,
+                        Type = x.Key.ResultType,
+                        Label = $"抽到「{Label(x.Key)}」{100 * x.Value / sum}%" + (cast0.Length > 0 ? $"({cast0})" : ""),
+                        Count = o.Count,
+                        Locked = o.LockedLines.ToList(),
+                    });
                 if (o.Open.Count == 0)
                     continue;
                 hit += x.Value;
@@ -345,6 +367,7 @@ namespace KnownUnknown
                     Rank = roll.Count.Any ? roll.Chance : -2,
                     Count = roll.Count,
                     Locked = roll.Locked,
+                    Outcomes = roll.Outcomes,
                 });
             }
         }
@@ -386,19 +409,26 @@ namespace KnownUnknown
         private Dictionary<string, FlagData> _flags;
 
         // 本旬可以去的入口：(說明, 劇本)。地點事件表每個機率 > 0 的結果、本旬的任務
-        private IEnumerable<KeyValuePair<string, string>> TurnEntries()
+        // 本旬可以去的入口：(說明與可指定的結果, 劇本)。地點事件表每個機率 > 0 的結果、本旬的任務
+        private IEnumerable<KeyValuePair<Outcome, string>> TurnEntries()
         {
             foreach (KeyValuePair<string, PositionResultData> t in PlaceTables())
             {
                 List<KeyValuePair<PositionEventData, int>> events = Events(t.Value);
                 int sum = events.Sum(x => x.Value);
                 foreach (KeyValuePair<PositionEventData, int> e in events)
-                    yield return new KeyValuePair<string, string>(
-                        $"{t.Key}抽到「{Label(e.Key)}」({100 * e.Value / sum}%)", ScriptOf(t.Value, e.Key));
+                    yield return new KeyValuePair<Outcome, string>(new Outcome
+                    {
+                        Table = t.Value,
+                        Type = e.Key.ResultType,
+                        Label = $"{t.Key}抽到「{Label(e.Key)}」({100 * e.Value / sum}%)",
+                    }, ScriptOf(t.Value, e.Key));
             }
             foreach (MissionCheckData m in ActiveMissions())
-                yield return new KeyValuePair<string, string>(
-                    m.Position == PositionType.無 ? "本旬的劇情" : $"去{PlaceName(m.Position)}的劇情", m.StartScript.ToLowerInvariant());
+                yield return new KeyValuePair<Outcome, string>(new Outcome
+                {
+                    Label = m.Position == PositionType.無 ? "本旬的劇情" : $"去{PlaceName(m.Position)}的劇情",
+                }, m.StartScript.ToLowerInvariant());
         }
 
         // 每條任務線目前在等的那一步(條件還沒成立的)。已過期的(指定的旬、區間已過)不算
@@ -474,8 +504,8 @@ namespace KnownUnknown
             if (_gated == null)
                 BuildGated();
             // 本旬走得到的分支裡會寫入、而且會改變值的旗標 → 在哪裡拿
-            Dictionary<FlagData, Dictionary<int, List<string>>> writes = new Dictionary<FlagData, Dictionary<int, List<string>>>();
-            foreach (KeyValuePair<string, string> e in TurnEntries())
+            Dictionary<FlagData, Dictionary<int, List<Outcome>>> writes = new Dictionary<FlagData, Dictionary<int, List<Outcome>>>();
+            foreach (KeyValuePair<Outcome, string> e in TurnEntries())
             {
                 List<KeyValuePair<Item, Guard[]>> all = _index.Paths(e.Value).ToList();
                 HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
@@ -486,11 +516,11 @@ namespace KnownUnknown
                     int v = x.Key.Add ? f.State + x.Key.Number : x.Key.Number;
                     if (v == f.State)
                         continue;
-                    if (!writes.TryGetValue(f, out Dictionary<int, List<string>> byValue))
-                        writes[f] = byValue = new Dictionary<int, List<string>>();
-                    if (!byValue.TryGetValue(v, out List<string> where))
-                        byValue[v] = where = new List<string>();
-                    if (!where.Contains(e.Key))
+                    if (!writes.TryGetValue(f, out Dictionary<int, List<Outcome>> byValue))
+                        writes[f] = byValue = new Dictionary<int, List<Outcome>>();
+                    if (!byValue.TryGetValue(v, out List<Outcome> where))
+                        byValue[v] = where = new List<Outcome>();
+                    if (!where.Any(o => o.Label == e.Key.Label))
                         where.Add(e.Key);
                 }
             }
@@ -500,9 +530,9 @@ namespace KnownUnknown
                 && !ReadStorySystem.Instance.ExistKey(g.Key) && g.Guards.Any(x => Blocks(x, g.InStory))).ToList();
             List<KeyValuePair<string, MissionCheckData>> pending = PendingMissions().Where(m => !MissionReady(m.Value)).ToList();
 
-            foreach (KeyValuePair<FlagData, Dictionary<int, List<string>>> w in writes)
+            foreach (KeyValuePair<FlagData, Dictionary<int, List<Outcome>>> w in writes)
             {
-                foreach (KeyValuePair<int, List<string>> byValue in w.Value)
+                foreach (KeyValuePair<int, List<Outcome>> byValue in w.Value)
                 {
                     // 假設拿到這個旗標，重新判斷；只算光靠它就解鎖的
                     _cond.Assume(new Dictionary<FlagData, int> { { w.Key, byValue.Key } });
@@ -534,7 +564,8 @@ namespace KnownUnknown
                     {
                         Where = $"拿{Cond.FlagName(w.Key)}",
                         Chance = "",
-                        Detail = $"在：{string.Join("、", byValue.Value.Take(2))};之後解鎖：{string.Join("、", what.Distinct().Take(3))}",
+                        Detail = $"在：{string.Join("、", byValue.Value.Take(2).Select(o => o.Label))};之後解鎖：{string.Join("、", what.Distinct().Take(3))}",
+                        Outcomes = byValue.Value.Where(o => o.Table != null).ToList(),
                         Rank = -3,
                         Count = count,
                         Flag = true,

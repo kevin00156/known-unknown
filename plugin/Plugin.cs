@@ -15,7 +15,7 @@ using UnityEngine.SceneManagement;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.5.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.6.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -23,6 +23,7 @@ namespace KnownUnknown
         private ConfigEntry<KeyCode> _toggleKey;
         private ConfigEntry<CountUnit> _countUnit;
         private ConfigEntry<bool> _showLocked;
+        private ConfigEntry<bool> _allowForce;
         private Harmony _harmony;
 
         // 劇本索引：讀檔在主執行緒，解析在背景
@@ -46,6 +47,7 @@ namespace KnownUnknown
 
         private GUIStyle _small;
         private GUIStyle _windowStyle;
+        private GUIStyle _picked;
 
         private void Awake()
         {
@@ -63,6 +65,11 @@ namespace KnownUnknown
                 _signature = null;
                 RefreshMenu();
             };
+            _allowForce = Config.Bind("General", "AllowForce", true,
+                "在清單裡雙擊地點事件的結果 = 指定下次去那裡一定抽到它(再雙擊取消)。會改變遊戲結果，不想要就關掉");
+            Force.Enabled = _allowForce.Value;
+            _allowForce.SettingChanged += (_, __) => Force.Enabled = _allowForce.Value;
+            Force.Log = m => Logger.LogInfo(m);
             Tally.Unit = _countUnit.Value;
             _countUnit.SettingChanged += (_, __) =>
             {
@@ -76,6 +83,7 @@ namespace KnownUnknown
                 && m.GetParameters()[2].ParameterType.Name == "LuaEnvironment");
             _harmony = new Harmony("known-unknown");
             _harmony.Patch(addOption, postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterAddOption)));
+            Force.Patch(_harmony);
             MenuSignals.OnMenuStart += OnMenuStart;
             MenuSignals.OnMenuEnd += OnMenuEnd;
             SceneManager.sceneLoaded += OnSceneLoaded;
@@ -241,6 +249,8 @@ namespace KnownUnknown
                 _windowStyle = new GUIStyle(GUI.skin.window);
                 _windowStyle.normal.background = bg;
                 _windowStyle.onNormal.background = bg;
+                _picked = new GUIStyle(GUI.skin.label) { wordWrap = true };
+                _picked.normal.textColor = new Color(1f, 0.85f, 0.3f);
             }
             float scale = Screen.height / 1080f;
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
@@ -253,6 +263,37 @@ namespace KnownUnknown
 
         // 寫回設定檔；SettingChanged 會重算清單和選單
         private void ToggleLocked() => _showLocked.Value = !_showLocked.Value;
+
+        // 地點事件的一個結果；雙擊 = 指定下次抽到它
+        private void DrawOutcome(Outcome o, string prefix)
+        {
+            bool on = Force.Is(o);
+            string note = o.Count.Any ? "" : "(條件不足，抽到也看不到)";
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"    {(on ? "★ " : "")}{prefix}{o.Label}{note}", on ? _picked : _small, GUILayout.Width(550));
+            GUILayout.Label(o.Count.Any ? o.Count.ToString() : "", _small, GUILayout.Width(110));
+            GUILayout.EndHorizontal();
+            Event e = Event.current;
+            if (_allowForce.Value && o.Table != null && e.type == EventType.MouseDown && e.clickCount == 2
+                && GUILayoutUtility.GetLastRect().Contains(e.mousePosition))
+            {
+                Force.Toggle(o);
+                e.Use();
+            }
+            foreach (string l in o.Locked)
+                GUILayout.Label("        " + Locked + l, _small);
+        }
+
+        // 測試用(dev 插件 invoke):跟雙擊同一條路
+        private string ToggleForce(string table, string type)
+        {
+            Outcome o = _list.SelectMany(h => h.Outcomes).FirstOrDefault(x =>
+                x.Table != null && x.Table.name == table && x.Type == type);
+            if (o == null)
+                return "not found";
+            Force.Toggle(o);
+            return Force.Is(o) ? "forced " + o.Label : "cleared";
+        }
 
         // 選單開著時：每個選項選了會看到什麼
         private void DrawMenu()
@@ -275,6 +316,13 @@ namespace KnownUnknown
             if (GUILayout.Toggle(_showLocked.Value, " 顯示未開放劇情和需要的條件(會劇透)") != _showLocked.Value)
                 ToggleLocked();
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(560));
+            if (_allowForce.Value && Force.All.Any())
+            {
+                GUILayout.Label("已指定(下次去就會抽到，雙擊取消):", _picked);
+                foreach (Outcome o in Force.All.ToList())
+                    DrawOutcome(o, "");
+                GUILayout.Space(10);
+            }
             if (_menu != null && _menu.IsActive() && _menuHints.Count > 0)
                 DrawMenu();
             GUILayout.Label("本旬 — " + _summary);
@@ -285,17 +333,24 @@ namespace KnownUnknown
             foreach (Hint h in _list)
             {
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(h.Where);
-                GUILayout.FlexibleSpace();
-                GUILayout.Label(h.Chance, GUILayout.Width(60));
+                GUILayout.Label(h.Where, GUILayout.Width(500));
+                GUILayout.Label(h.Chance, GUILayout.Width(50));
                 GUILayout.Label(h.Count.Any ? h.Count.ToString() : "", GUILayout.Width(110));
                 GUILayout.EndHorizontal();
-                GUILayout.Label("    " + h.Detail, _small);
-                foreach (string l in h.Locked)
-                    GUILayout.Label("    " + Locked + l, _small);
+                // 地點：逐一列出還有白字的結果；旗標：取得處。其他(任務)照舊一行說明
+                if (h.Outcomes.Count == 0 || h.Flag)
+                    GUILayout.Label("    " + h.Detail, _small);
+                foreach (Outcome o in h.Outcomes)
+                    DrawOutcome(o, h.Flag ? "在 " : "");
+                if (h.Outcomes.Count == 0)
+                {
+                    foreach (string l in h.Locked)
+                        GUILayout.Label("    " + Locked + l, _small);
+                }
             }
             GUILayout.EndScrollView();
-            GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。", _small);
+            GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。"
+                + (_allowForce.Value ? "雙擊結果可以指定下次一定抽到它，再雙擊取消。" : ""), _small);
             GUI.DragWindow();
         }
     }
