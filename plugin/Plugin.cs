@@ -16,7 +16,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.8.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.9.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -67,7 +67,7 @@ namespace KnownUnknown
             _countUnit = Config.Bind("General", "CountUnit", CountUnit.Both,
                 "白字怎麼算：Events = 幾段劇情(還有白字的事件/結果),Lines = 幾句台詞,Both = 兩個都顯示");
             _showLocked = Config.Bind("General", "ShowLocked", false,
-                "也列出目前條件不足的白字和需要的條件(好感、屬性、旗標從哪拿)。會劇透有哪些劇情。現版本拿不到的永遠不列。視窗裡也能直接勾選");
+                "也列出現版本未開放的白字(條件永遠不會成立，例如沒有任何地方會設的旗標)。會劇透。角色條件還不夠的白字一律會列，標「條件不足」和需要的條件。視窗裡也能直接勾選");
             Hints.ShowLocked = _showLocked.Value;
             _showLocked.SettingChanged += (_, __) =>
             {
@@ -189,7 +189,7 @@ namespace KnownUnknown
             {
                 Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {(h.Count.Any ? h.Count.ToString() : "")} | {h.Detail}");
                 foreach (string l in h.Locked)
-                    Logger.LogInfo($"[本旬]     未開放 {l}");
+                    Logger.LogInfo($"[本旬]     {l}");
             }
         }
 
@@ -254,7 +254,7 @@ namespace KnownUnknown
                 if (hint == null)
                     return;
                 foreach (string l in hint.Locked)
-                    Logger.LogInfo($"[選單]   未開放 {l}");
+                    Logger.LogInfo($"[選單]   {l}");
                 _menuHints.Add(new KeyValuePair<string, OptionHint>(Text.OptionLabel(text), hint));
             }
             catch (Exception e)
@@ -324,8 +324,6 @@ namespace KnownUnknown
             _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢", _windowStyle);
         }
 
-        private const string Locked = "未開放 ";
-
         // 寫回設定檔；SettingChanged 會重算清單和選單
         private void ToggleLocked() => _showLocked.Value = !_showLocked.Value;
 
@@ -348,7 +346,7 @@ namespace KnownUnknown
                 e.Use();
             }
             foreach (string l in o.Locked)
-                GUILayout.Label("        " + Locked + l, _small);
+                GUILayout.Label("        " + l, _small);
         }
 
         // 測試用(dev 插件 invoke):跟雙擊同一條路
@@ -384,7 +382,7 @@ namespace KnownUnknown
                 GUILayout.Label(o.Value.Text, o.Value.Text == "已看完" ? _small : GUI.skin.label);
                 GUILayout.EndHorizontal();
                 foreach (string l in o.Value.Locked)
-                    GUILayout.Label("      " + Locked + l, _small);
+                    GUILayout.Label("      " + l, _small);
             }
             GUILayout.Space(10);
         }
@@ -420,14 +418,14 @@ namespace KnownUnknown
                     e.Use();
                 }
                 foreach (string l in h?.Locked ?? new List<string>())
-                    GUILayout.Label("      " + Locked + l, _small);
+                    GUILayout.Label("      " + l, _small);
             }
             GUILayout.Space(10);
         }
 
         private void DrawWindow(int id)
         {
-            if (GUILayout.Toggle(_showLocked.Value, " 顯示未開放劇情和需要的條件(會劇透)") != _showLocked.Value)
+            if (GUILayout.Toggle(_showLocked.Value, " 也顯示現版本未開放的劇情(會劇透)") != _showLocked.Value)
                 ToggleLocked();
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(560));
             if (_allowForce.Value && Force.All.Any())
@@ -461,7 +459,7 @@ namespace KnownUnknown
                 if (h.Outcomes.Count == 0)
                 {
                     foreach (string l in h.Locked)
-                        GUILayout.Label("    " + Locked + l, _small);
+                        GUILayout.Label("    " + l, _small);
                 }
             }
             GUILayout.EndScrollView();

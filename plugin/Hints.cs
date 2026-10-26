@@ -44,12 +44,13 @@ namespace KnownUnknown
     {
         public readonly HashSet<string> Open = new HashSet<string>();
         public readonly Dictionary<string, HashSet<string>> Locked = new Dictionary<string, HashSet<string>>();
+        public readonly HashSet<string> Closed = new HashSet<string>();   // Locked 裡現版本拿不到的原因
 
         public Tally Count => new Tally(Open.Count > 0 ? 1 : 0, Open.Count);
 
-        // 「1 段・3 句：小師妹好感 ≥ 20(目前 14)」
-        public IEnumerable<string> LockedLines =>
-            Locked.Select(x => $"{new Tally(1, x.Value.Count)}:{x.Key}");
+        // 「條件不足 1 段・3 句：小師妹好感 ≥ 20(目前 14)」;what 接在標籤後面(「抽到「其他」」)
+        public IEnumerable<string> LockedLines(string what = "") =>
+            Locked.Select(x => $"{(Closed.Contains(x.Key) ? "未開放" : "條件不足")} {what}{new Tally(1, x.Value.Count)}:{x.Key}");
     }
 
     internal class Hint
@@ -59,7 +60,7 @@ namespace KnownUnknown
         public string Detail;  // 沒看過的結果 / 登場人物
         public int Rank;       // 排序用：越大越前面
         public Tally Count;
-        public List<string> Locked = new List<string>();   // 條件不足的白字(ShowLocked 才有)
+        public List<string> Locked = new List<string>();   // 條件不足的白字(現版本未開放的要 ShowLocked)
         public bool Flag;      // 「本旬拿得到、之後解鎖白字」的旗標提示
         public List<Outcome> Outcomes = new List<Outcome>();   // 地點：各結果；旗標：取得處
     }
@@ -111,7 +112,7 @@ namespace KnownUnknown
         // 劇本 → 玩家看得懂的入口說明(「伙房「掌廚」抽到「其他」」),說旗標在哪裡拿用
         private Dictionary<string, string> _labels;
 
-        // 顯示條件不足的白字(劇透)
+        // 也列出現版本拿不到的白字(條件永遠不會成立；劇透)
         public static bool ShowLocked;
 
         // PositionType 的 [StringValue];畫面上的名字在 Position/Name/<值>(enum 名「校場」畫面上是「練功場」)
@@ -162,12 +163,15 @@ namespace KnownUnknown
                     o.Open.Add(x.Key.Value);
                     continue;
                 }
-                // 現版本拿不到的條件(旗標沒有任何地方寫入)：當它不存在
-                if (!ShowLocked || blockers.Any(g => _cond.Impossible(g, Obtainable)))
+                // 現版本拿不到的條件(旗標沒有任何地方寫入)：沒勾就當它不存在
+                bool closed = blockers.Any(g => _cond.Impossible(g, Obtainable));
+                if (closed && !ShowLocked)
                     continue;
                 string why = string.Join(";還要 ", blockers.Select(g => _cond.Need(g, FlagSource)).Where(w => w != null).Distinct());
                 if (!o.Locked.TryGetValue(why, out HashSet<string> keys))
                     o.Locked[why] = keys = new HashSet<string>();
+                if (closed)
+                    o.Closed.Add(why);
                 keys.Add(x.Key.Value);
             }
             foreach (HashSet<string> keys in o.Locked.Values)
@@ -217,7 +221,7 @@ namespace KnownUnknown
             {
                 string script = ScriptOf(pr, x.Key);
                 Outlook o = Look(script);
-                roll.Locked.AddRange(o.LockedLines.Select(l => $"抽到「{Label(x.Key)}」{l}"));
+                roll.Locked.AddRange(o.LockedLines($"抽到「{Label(x.Key)}」"));
                 string cast0 = _index.Cast(script, 2);
                 if (o.Open.Count > 0 || o.Locked.Count > 0)
                     roll.Outcomes.Add(new Outcome
@@ -226,7 +230,7 @@ namespace KnownUnknown
                         Type = x.Key.ResultType,
                         Label = $"抽到「{Label(x.Key)}」{100 * x.Value / sum}%" + (cast0.Length > 0 ? $"({cast0})" : ""),
                         Count = o.Count,
-                        Locked = o.LockedLines.ToList(),
+                        Locked = o.LockedLines().ToList(),
                     });
                 if (o.Open.Count == 0)
                     continue;
@@ -306,7 +310,7 @@ namespace KnownUnknown
             Tally t = looks.Aggregate(new Tally(), (a, o) => a + o.Count);
             if (t.Any)
                 parts.Add($"白字 {t}");
-            hint.Locked.AddRange(looks.SelectMany(o => o.LockedLines));
+            hint.Locked.AddRange(looks.SelectMany(o => o.LockedLines()));
             hint.Detail += string.Join(",", looks.SelectMany(o => o.Open).Distinct());
             hint.Text = parts.Count == 0 ? "已看完" : string.Join(",", parts);
             return hint;
@@ -321,7 +325,7 @@ namespace KnownUnknown
             List<Hint> hints = new List<Hint>();
             AddMissions(hints);
             AddPlaces(hints);
-            if (ShowLocked && HasResults)
+            if (HasResults)
                 AddFlags(hints);
             hints.Sort((a, b) => b.Rank != a.Rank ? b.Rank.CompareTo(a.Rank) : b.Count.Lines.CompareTo(a.Count.Lines));
             return hints;
@@ -356,7 +360,7 @@ namespace KnownUnknown
                     Detail = "劇情" + (cast.Length > 0 ? ",登場：" + cast : ""),
                     Rank = o.Open.Count == 0 ? -2 : auto ? -1 : 1000,
                     Count = o.Count,
-                    Locked = o.LockedLines.ToList(),
+                    Locked = o.LockedLines().ToList(),
                 });
             }
         }
@@ -594,7 +598,7 @@ namespace KnownUnknown
         // 要有地點事件表(劇情場景)和地點資料(地圖場景，跑劇情時也還在)才建得出來
         private void EnsureLabels()
         {
-            if (_labels == null && ShowLocked && HasResults && Resources.FindObjectsOfTypeAll<FreePositionData>().Length > 0)
+            if (_labels == null && HasResults && Resources.FindObjectsOfTypeAll<FreePositionData>().Length > 0)
                 _labels = Labels();
         }
 

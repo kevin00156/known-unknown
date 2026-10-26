@@ -334,11 +334,19 @@ namespace KnownUnknown
         private static bool Constant(StatGroupVariable v) =>
             v == null || Refs(v).All(r => r.CheckType == StatCheckType.常數);
 
-        // 數字的顯示：時間變數換成「第2年1月下旬」
+        // 值是代號的變數 → 遊戲在地化表的前綴(心上人 8 =「PlayerInfo/Lover/8」= 龍湘)
+        private static readonly Dictionary<string, string> Named = new Dictionary<string, string>
+        {
+            { "數值_心上人", "PlayerInfo/Lover/" },
+        };
+
+        // 數字的顯示：時間變數換成「第2年1月下旬」，代號換成名字
         private static string Show(StatGroupVariable v, int? n)
         {
             if (n == null)
                 return "隨機";
+            if (v != null && Named.TryGetValue(v.name, out string key))
+                return Lean.Localization.LeanLocalization.GetTranslationText(key + n.Value, n.Value.ToString());
             if (v != null && Refs(v).Any(r => r.CheckType == StatCheckType.遊戲時間))
                 return Date(n.Value);
             return n.Value.ToString();
