@@ -1,0 +1,10 @@
+[project]
+name = "lom-unread"
+version = "0.1.0"
+description = "活俠傳未讀劇情(白字)盤點"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typetreegeneratorapi>=0.0.10",
+    "unitypy>=1.25.4",
+]
