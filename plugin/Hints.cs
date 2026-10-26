@@ -60,6 +60,7 @@ namespace KnownUnknown
         public int Rank;       // 排序用：越大越前面
         public Tally Count;
         public List<string> Locked = new List<string>();   // 條件不足的白字(ShowLocked 才有)
+        public bool Flag;      // 「本旬拿得到、之後解鎖白字」的旗標提示
     }
 
     // 選單上一個選項的提示
@@ -289,6 +290,8 @@ namespace KnownUnknown
             List<Hint> hints = new List<Hint>();
             AddMissions(hints);
             AddPlaces(hints);
+            if (ShowLocked && HasResults)
+                AddFlags(hints);
             hints.Sort((a, b) => b.Rank != a.Rank ? b.Rank.CompareTo(a.Rank) : b.Count.Lines.CompareTo(a.Count.Lines));
             return hints;
         }
@@ -363,6 +366,179 @@ namespace KnownUnknown
                     string action = _index.ActionOf(i.Value);
                     yield return new KeyValuePair<string, PositionResultData>(
                         where + (action == null ? "" : $" →「{Text.OptionLabel(action)}」"), pr);
+                }
+            }
+        }
+
+        // ---- 本旬拿得到、之後會解鎖白字的旗標 ----
+
+        // 被旗標條件擋住的白字(所有入口；靜態，第一次用時建)
+        private class Gated
+        {
+            public string Key;
+            public Guard[] Guards;
+            public string Root;
+            public HashSet<string> InStory;   // 這個入口自己會寫入的旗標
+            public HashSet<string> Flags;     // 沿途條件牽涉到的旗標
+        }
+
+        private List<Gated> _gated;
+        private Dictionary<string, FlagData> _flags;
+
+        // 本旬可以去的入口：(說明, 劇本)。地點事件表每個機率 > 0 的結果、本旬的任務
+        private IEnumerable<KeyValuePair<string, string>> TurnEntries()
+        {
+            foreach (KeyValuePair<string, PositionResultData> t in PlaceTables())
+            {
+                List<KeyValuePair<PositionEventData, int>> events = Events(t.Value);
+                int sum = events.Sum(x => x.Value);
+                foreach (KeyValuePair<PositionEventData, int> e in events)
+                    yield return new KeyValuePair<string, string>(
+                        $"{t.Key}抽到「{Label(e.Key)}」({100 * e.Value / sum}%)", ScriptOf(t.Value, e.Key));
+            }
+            foreach (MissionCheckData m in ActiveMissions())
+                yield return new KeyValuePair<string, string>(
+                    m.Position == PositionType.無 ? "本旬的劇情" : $"去{PlaceName(m.Position)}的劇情", m.StartScript.ToLowerInvariant());
+        }
+
+        // 每條任務線目前在等的那一步(條件還沒成立的)。已過期的(指定的旬、區間已過)不算
+        private List<KeyValuePair<string, MissionCheckData>> PendingMissions()
+        {
+            MissionManagerData mm = MissionManagerData.Instance;
+            List<KeyValuePair<string, MissionCheckData>> pending = new List<KeyValuePair<string, MissionCheckData>>();
+            List<MissionData> lines = new List<MissionData> { Traverse.Create(mm).Field("_main").GetValue<MissionData>() };
+            lines.AddRange(Traverse.Create(mm).Field("_subMissions").GetValue<SubMissionsData>().List);
+            HashSet<MissionCheckData> active = new HashSet<MissionCheckData>(ActiveMissions());
+            foreach (MissionData line in lines.Where(l => l != null && l.CurrentKey != "clear"))
+            {
+                MissionCheckData m = Traverse.Create(line).Field("_missions").GetValue<MissionCheckData[]>()
+                    .FirstOrDefault(x => x != null && x.Key == line.CurrentKey);
+                if (m == null || active.Contains(m) || Expired(m))
+                    continue;
+                // 任務線多半沒有描述(名字是 S0030 這種代碼),改用登場人物
+                string desc = Traverse.Create(line).Field("_desc").GetValue<string>();
+                string cast = _index.Cast(m.StartScript.ToLowerInvariant(), 2);
+                pending.Add(new KeyValuePair<string, MissionCheckData>(
+                    !string.IsNullOrEmpty(desc) ? $"任務「{desc}」" : cast.Length > 0 ? $"{cast}的任務" : "一段任務", m));
+            }
+            return pending;
+        }
+
+        private static bool Expired(MissionCheckData m)
+        {
+            Traverse t = Traverse.Create(m);
+            if (!t.Field("_active").GetValue<bool>())
+                return true;
+            if (!t.Field("_dayCheck").GetValue<bool>())
+                return false;
+            GameTime now = PlayerStatManagerData.Instance.GameTime;
+            TimeCheckType type = t.Field("_timeCheckType").GetValue<TimeCheckType>();
+            if (type == TimeCheckType.特定)
+                return t.Field("_specificTime").GetValue<GameTime>() < now;
+            if (type == TimeCheckType.區間)
+                return t.Field("_maxTime").GetValue<GameTime>() < now;
+            return false;
+        }
+
+        private bool MissionReady(MissionCheckData m) =>
+            Traverse.Create(m).Field("_conditions").GetValue<ConditionResultItem[]>().All(_cond.Eval);
+
+        private void BuildGated()
+        {
+            _flags = new Dictionary<string, FlagData>();
+            foreach (FlagData f in Resources.FindObjectsOfTypeAll<FlagData>())
+                _flags[f.name] = f;
+            HashSet<string> roots = new HashSet<string>(Resources.FindObjectsOfTypeAll<MissionCheckData>()
+                .Select(m => m.StartScript.ToLowerInvariant()));
+            foreach (PositionResultData pr in _results.Values)
+                roots.UnionWith(pr.List.Where(e => e != null).Select(e => ScriptOf(pr, e)));
+            _gated = new List<Gated>();
+            foreach (string root in roots.Where(_index.Has))
+            {
+                List<KeyValuePair<Item, Guard[]>> all = _index.Paths(root).ToList();
+                HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
+                foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => x.Key.Kind == ItemKind.Key))
+                {
+                    HashSet<string> flags = new HashSet<string>(x.Value.SelectMany(_cond.Flags).Select(f => f.name));
+                    if (flags.Count > 0)
+                        _gated.Add(new Gated { Key = x.Key.Value, Guards = x.Value, Root = root, InStory = inStory, Flags = flags });
+                }
+            }
+        }
+
+        // 暫存旗標(同一段劇情裡設、讀，用完就清)不算
+        private static bool Temporary(FlagData f) => (f.DevNote ?? "").Contains("暫存");
+
+        private void AddFlags(List<Hint> hints)
+        {
+            if (_gated == null)
+                BuildGated();
+            // 本旬走得到的分支裡會寫入、而且會改變值的旗標 → 在哪裡拿
+            Dictionary<FlagData, Dictionary<int, List<string>>> writes = new Dictionary<FlagData, Dictionary<int, List<string>>>();
+            foreach (KeyValuePair<string, string> e in TurnEntries())
+            {
+                List<KeyValuePair<Item, Guard[]>> all = _index.Paths(e.Value).ToList();
+                HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
+                foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => x.Key.Kind == ItemKind.Flag))
+                {
+                    if (!_flags.TryGetValue(x.Key.Value, out FlagData f) || Temporary(f) || x.Value.Any(g => Blocks(g, inStory)))
+                        continue;
+                    int v = x.Key.Add ? f.State + x.Key.Number : x.Key.Number;
+                    if (v == f.State)
+                        continue;
+                    if (!writes.TryGetValue(f, out Dictionary<int, List<string>> byValue))
+                        writes[f] = byValue = new Dictionary<int, List<string>>();
+                    if (!byValue.TryGetValue(v, out List<string> where))
+                        byValue[v] = where = new List<string>();
+                    if (!where.Contains(e.Key))
+                        where.Add(e.Key);
+                }
+            }
+
+            // 現在被擋住、跟這些旗標有關的白字
+            List<Gated> blocked = _gated.Where(g => g.Flags.Overlaps(writes.Keys.Select(f => f.name))
+                && !ReadStorySystem.Instance.ExistKey(g.Key) && g.Guards.Any(x => Blocks(x, g.InStory))).ToList();
+            List<KeyValuePair<string, MissionCheckData>> pending = PendingMissions().Where(m => !MissionReady(m.Value)).ToList();
+
+            foreach (KeyValuePair<FlagData, Dictionary<int, List<string>>> w in writes)
+            {
+                foreach (KeyValuePair<int, List<string>> byValue in w.Value)
+                {
+                    // 假設拿到這個旗標，重新判斷；只算光靠它就解鎖的
+                    _cond.Assume(new Dictionary<FlagData, int> { { w.Key, byValue.Key } });
+                    Dictionary<string, HashSet<string>> unlocked = new Dictionary<string, HashSet<string>>();
+                    foreach (Gated g in blocked.Where(g => g.Flags.Contains(w.Key.name) && !g.Guards.Any(x => Blocks(x, g.InStory))))
+                    {
+                        if (!unlocked.TryGetValue(g.Root, out HashSet<string> keys))
+                            unlocked[g.Root] = keys = new HashSet<string>();
+                        keys.Add(g.Key);
+                    }
+                    List<string> what = new List<string>();
+                    foreach (KeyValuePair<string, MissionCheckData> m in pending.Where(m => MissionReady(m.Value)))
+                    {
+                        string start = m.Value.StartScript.ToLowerInvariant();
+                        HashSet<string> keys = new HashSet<string>(_index.Keys(start, _ => true).Where(k => !ReadStorySystem.Instance.ExistKey(k)));
+                        if (keys.Count == 0)
+                            continue;
+                        unlocked[start] = keys;
+                        what.Add(m.Key);
+                    }
+                    what.AddRange(unlocked.Keys.Where(r => !pending.Any(m => m.Value.StartScript.ToLowerInvariant() == r))
+                        .Select(r => _labels != null && _labels.TryGetValue(r, out string l) ? l
+                            : _index.Cast(r, 2).Length > 0 ? _index.Cast(r, 2) + "的劇情" : "其他劇情"));
+                    _cond.Assume(null);
+                    if (unlocked.Count == 0)
+                        continue;
+                    Tally count = new Tally(unlocked.Count, unlocked.Values.Sum(k => k.Count));
+                    hints.Add(new Hint
+                    {
+                        Where = $"拿{Cond.FlagName(w.Key)}",
+                        Chance = "",
+                        Detail = $"在：{string.Join("、", byValue.Value.Take(2))};之後解鎖：{string.Join("、", what.Distinct().Take(3))}",
+                        Rank = -3,
+                        Count = count,
+                        Flag = true,
+                    });
                 }
             }
         }

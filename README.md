@@ -32,17 +32,35 @@ uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
 
 ## 已知限制
 
-- Lua 劇本內部的分支(`checkpointmanager.Switch/Condition`)沒有求值，同一劇本裡拿不到的分支仍算白字。
-- 入口條件只顯示，不跟目前存檔的旗標比對；「現在去哪裡能看到」要等遊戲內插件(KU-3)用 runtime 判斷。
+- 離線工具不對劇本內部分支求值，也不跟目前存檔的旗標比對；這些由遊戲內插件用當下狀態判斷。
+- 插件用「現在」的屬性/好感判斷分支；同一段劇情前面才加的好感不會預先算進去(旗標有處理)。
+- 「本旬拿得到的旗標」只算光靠這一個旗標就能解鎖的內容，還缺其他條件的不列。
 
 ## 遊戲內插件(plugin/,BepInEx 6)
 
 按 **F8**(BepInEx 設定 `known-unknown.cfg` 可改)開關視窗，列出**這一旬**還看得到白字的地方；開著時會跟著遊戲狀態自動更新。
 
-選單出現時，右上角會自動列出每個選項會看到多少白字(地點行動顯示抽到沒看過結果的機率；分支裡的 Switch 條件會用當下狀態判斷)。在自由行動地圖上會自動顯示本旬白字最多的地方。設定 `MenuHints` / `MapHints` 可關閉。算出的結果也會寫進 `BepInEx/LogOutput.log`(`[選單]`、`[本旬]`)，方便對照。
+選單出現時，右上角會自動列出每個選項會看到多少白字(地點行動顯示抽到沒看過結果的機率)。在自由行動地圖上會自動顯示本旬白字最多的地方(要先進過一次地點：地點事件表跟著劇情場景才載入)。算出的結果也會寫進 `BepInEx/LogOutput.log`(`[選單]`、`[本旬]`)，方便對照。
 
 - 這一旬已經生效的任務(`MissionManagerData.ActiveSubMissions` + 主線)：要去哪個地點，或本旬會自動觸發
-- 各地點的隨機事件：用遊戲自己的 `PositionEventData.GetRate()` 算當下機率，只列還有白字的
+- 各地點的隨機事件：照遊戲的抽法(依序取機率 > 0、同結果代碼只算第一筆)算當下機率，只列還有白字的
+- 劇本裡的分支(Switch、選項的 Condition)用當下遊戲狀態判斷，只算現在走得到的白字；
+  同一段劇情裡自己會設的旗標(暫存旗標、前面選項設的)當成可能成立
+
+設定(`BepInEx/config/known-unknown.cfg`):
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `ToggleKey` | F8 | 開關完整清單 |
+| `MenuHints` / `MapHints` | true | 選單 / 地圖上的提示 |
+| `CountUnit` | Both | `Events` = 幾段劇情、`Lines` = 幾句台詞、`Both` = 「2 段・11 句」 |
+| `ShowLocked` | false | **會劇透**。也列出目前條件不足的白字和需要的條件(好感、屬性、物品、旗標從哪拿)，以及「本旬拿得到、之後會解鎖白字的旗標」。現版本拿不到的(旗標沒有任何地方寫入)永遠不列 |
+
+條件判斷全部自己重寫成只讀：遊戲的 `SwitchResultData/ConditionResultData.Execute()` 會讓計數 +1,
+DiceMaster 在 `PositionEventData.GetRate()` 上掛了 patch(呼叫會吃掉玩家指定的事件)，插件都不呼叫。
+
+`plugin/SystemFlags.cs` 是 Lua 以外(戰鬥、商店、設施…)會寫入的旗標清單，遊戲更新後用
+`uv run python known_unknown.py --system-flags plugin/SystemFlags.cs` 重新產生。
 
 已讀判斷直接問 `ReadStorySystem.ExistKey`,不讀不寫存檔。
 
@@ -54,3 +72,6 @@ docker run --rm -v "$PWD":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \
   mcr.microsoft.com/dotnet/sdk:8.0 dotnet build -c Release -p:GamePath=/game -o /src/bin/out
 cp bin/out/KnownUnknown.dll "$GAME/BepInEx/plugins/KnownUnknown/"
 ```
+
+開發用遙控插件(`dev/`,不隨 mod 發佈)：讀 `BepInEx/ku-cmd.txt` 的指令在遊戲內點 UI、透過 DiceMaster 指定地點事件、
+指定骰子點數、比對已讀台詞(`snap`/`diff`)，不用搶滑鼠鍵盤焦點就能自動測試。指令見 `dev/Remote.cs` 開頭。

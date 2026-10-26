@@ -278,6 +278,9 @@ namespace KnownUnknown
         {
             List<KeyValuePair<string, string>> lines = _list.Where(h => h.Rank >= 0).Take(6)
                 .Select(h => new KeyValuePair<string, string>(h.Where, $"{h.Chance} {h.Count}")).ToList();
+            // 本旬拿得到、之後會解鎖白字的旗標(ShowLocked 才有)
+            lines.AddRange(_list.Where(h => h.Flag).Take(3)
+                .Select(h => new KeyValuePair<string, string>("", $"{h.Where} → 之後 {h.Count}:{h.Detail}")));
             if (!_hints.HasResults)
                 lines.Add(new KeyValuePair<string, string>("地點機率要等進過一次地點才算得出來", ""));
             else if (lines.Count == 0)
