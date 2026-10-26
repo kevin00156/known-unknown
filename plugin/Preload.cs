@@ -71,6 +71,7 @@ namespace KnownUnknown
 
         private static List<ScriptableObject> Build()
         {
+            System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
             List<ScriptableObject> none = new List<ScriptableObject>();
             // 第一行 = 劇情場景資產檔大小；E<tab>類別<tab>名字 = 常駐物件；O<tab>完整類別<tab>名字<tab>JSON<tab>引用 = 要新建的
             string[][] lines;
@@ -99,9 +100,13 @@ namespace KnownUnknown
                 }
             }
 
+            // AccessTools.TypeByName 每次都掃全部組件的型別(一次幾毫秒),5000 多個物件會卡住幾十秒;只有幾種型別，查一次就好
+            Dictionary<string, Type> types = new Dictionary<string, Type>();
             ScriptableObject[] made = objs.Select(o =>
             {
-                ScriptableObject so = ScriptableObject.CreateInstance(AccessTools.TypeByName(o[1]));
+                if (!types.TryGetValue(o[1], out Type t))
+                    types[o[1]] = t = AccessTools.TypeByName(o[1]);
+                ScriptableObject so = ScriptableObject.CreateInstance(t);
                 so.name = o[2];
                 so.hideFlags = HideFlags.HideAndDontSave;   // 換場景的 UnloadUnusedAssets 不會收掉
                 return so;
@@ -127,11 +132,21 @@ namespace KnownUnknown
                 return none;
             }
             Log($"[預載] 重建 {tables.Count} 張地點事件表、{events} 個事件、{made.OfType<SwitchResultData>().Count()} 張 Switch 表、"
-                + $"{made.OfType<ConditionResultData>().Count()} 張 Condition 表");
+                + $"{made.OfType<ConditionResultData>().Count()} 張 Condition 表，{clock.ElapsedMilliseconds} ms");
             return made.ToList();
         }
 
         private static readonly Regex Segment = new Regex(@"^(\w+)(?:\[(\d+)\])?$");
+
+        private static readonly Dictionary<string, FieldInfo> Fields = new Dictionary<string, FieldInfo>();
+
+        private static FieldInfo Field(Type t, string name)
+        {
+            string k = t.FullName + "." + name;
+            if (!Fields.TryGetValue(k, out FieldInfo f))
+                Fields[k] = f = AccessTools.Field(t, name);
+            return f;
+        }
 
         // 「_activeCondition._items[0]._value1」:沿路取欄位 / 清單元素，最後一段設值
         private static void Set(object root, string path, object value)
@@ -141,7 +156,7 @@ namespace KnownUnknown
             for (int p = 0; p < parts.Length; p++)
             {
                 Match m = Segment.Match(parts[p]);
-                FieldInfo f = AccessTools.Field(cur.GetType(), m.Groups[1].Value);
+                FieldInfo f = Field(cur.GetType(), m.Groups[1].Value);
                 bool last = p == parts.Length - 1;
                 if (!m.Groups[2].Success)
                 {

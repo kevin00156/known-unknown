@@ -16,12 +16,19 @@ namespace KnownUnknown
     }
 
     // 所在分支的一個條件：變數 == Value
-    internal struct Guard
+    // 會拿來當字典鍵、Distinct:struct 預設的 Equals/GetHashCode 走反射，很慢
+    internal struct Guard : IEquatable<Guard>
     {
         public GuardKind Kind;
         public string Name;   // Switch 名或 choice 變數名
         public int Value;
         public string Gate;   // Choice:這個選項要 checkpointmanager.Condition(Gate) 成立才會出現在選單上
+
+        public bool Equals(Guard o) => Kind == o.Kind && Value == o.Value && Name == o.Name && Gate == o.Gate;
+
+        public override bool Equals(object o) => o is Guard g && Equals(g);
+
+        public override int GetHashCode() => ((int)Kind * 397 ^ Value) * 397 ^ (Name?.GetHashCode() ?? 0) ^ (Gate?.GetHashCode() ?? 0);
     }
 
     internal enum ItemKind

@@ -43,7 +43,7 @@ namespace KnownUnknown
     // 條件不足 / 現版本未開放用顏色分，不另外寫字(IMGUI rich text;日誌用 Plain 去掉)
     internal static class Paint
     {
-        public const string Lacking = "#E8A050";   // 條件不足：橘
+        public const string Lacking = "#B48C5A";   // 條件不足：暗一點的土黃，不搶眼
         public const string Closed = "#8C8C8C";    // 現版本未開放：灰
 
         public static string Color(string color, string s) => $"<color={color}>{s}</color>";
@@ -516,13 +516,21 @@ namespace KnownUnknown
             foreach (PositionResultData pr in _results.Values)
                 roots.UnionWith(pr.List.Where(e => e != null).Select(e => ScriptOf(pr, e)));
             _gated = new List<Gated>();
+            // 同一個分支條件出現在很多條路徑上；每次重查會一直碰 Unity 物件(== null、name),很慢
+            Dictionary<Guard, string[]> names = new Dictionary<Guard, string[]>();
+            string[] Names(Guard g)
+            {
+                if (!names.TryGetValue(g, out string[] n))
+                    names[g] = n = _cond.Flags(g).Select(f => f.name).ToArray();
+                return n;
+            }
             foreach (string root in roots.Where(_index.Has))
             {
                 List<KeyValuePair<Item, Guard[]>> all = _index.Paths(root).ToList();
                 HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
                 foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => x.Key.Kind == ItemKind.Key))
                 {
-                    HashSet<string> flags = new HashSet<string>(x.Value.SelectMany(_cond.Flags).Select(f => f.name));
+                    HashSet<string> flags = new HashSet<string>(x.Value.SelectMany(Names));
                     if (flags.Count > 0)
                         _gated.Add(new Gated { Key = x.Key.Value, Guards = x.Value, Root = root, InStory = inStory, Flags = flags });
                 }

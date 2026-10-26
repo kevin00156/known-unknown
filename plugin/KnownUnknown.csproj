@@ -4,7 +4,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>KnownUnknown</AssemblyName>
     <RootNamespace>KnownUnknown</RootNamespace>
-    <Version>0.11.0</Version>
+    <Version>0.11.1</Version>
     <DebugType>none</DebugType>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
@@ -28,6 +28,7 @@
     <Reference Include="$(Managed)/LeanLocalization.dll" Private="false" />
     <Reference Include="$(Managed)/Fungus.dll" Private="false" />
     <Reference Include="$(Managed)/UnityEngine.UI.dll" Private="false" />
+    <Reference Include="$(Managed)/Unity.InputSystem.dll" Private="false" />
   </ItemGroup>
 
   <ItemGroup>

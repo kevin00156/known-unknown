@@ -11,12 +11,15 @@ using HarmonyLib;
 using Mortal.Core;
 using Mortal.Free;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using Mouse = UnityEngine.InputSystem.Mouse;
+using InputSystem = UnityEngine.InputSystem.InputSystem;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.11.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.11.1")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -97,10 +100,6 @@ namespace KnownUnknown
             _harmony.Patch(addOption, postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterAddOption)));
             Force.Patch(_harmony);
             Dice.Patch(_harmony);
-            // IMGUI 視窗擋不住 EventSystem:沒擋的話，點視窗會穿過去點到後面的地點
-            foreach (string m in new[] { "OnPointerClick", "OnPointerEnter" })
-                _harmony.Patch(AccessTools.Method(typeof(PositionCollider), m),
-                    prefix: new HarmonyMethod(typeof(Plugin), nameof(NotUnderWindow)));
             MenuSignals.OnMenuStart += OnMenuStart;
             MenuSignals.OnMenuEnd += OnMenuEnd;
             SceneManager.sceneLoaded += OnSceneLoaded;
@@ -109,6 +108,7 @@ namespace KnownUnknown
 
         private void OnDestroy()
         {
+            BlockGameMouse(false);
             MenuSignals.OnMenuStart -= OnMenuStart;
             MenuSignals.OnMenuEnd -= OnMenuEnd;
             SceneManager.sceneLoaded -= OnSceneLoaded;
@@ -128,6 +128,9 @@ namespace KnownUnknown
                 _show = !_show;
                 _signature = null;
             }
+            bool over = MouseOverWindow();
+            if (over || _muted.Count > 0 || _mouseOff)
+                BlockGameMouse(over);
             // 選單剛跳出來就按，玩家看不到選單；等一下再按
             if (_goButton != null && Time.unscaledTime >= _goAt)
             {
@@ -175,8 +178,10 @@ namespace KnownUnknown
             }
             MissionManagerData mm = MissionManagerData.Instance;
             GameTime t = PlayerStatManagerData.Instance.GameTime;
-            string sig = $"{t.Year}/{t.Month}/{(int)t.Stage}/{Game.ReadCount()}/"
-                + $"{mm.ActiveSubMissions?.Count}/{mm.MainMissionStart}/{OnMap()}";
+            // 已讀句數只在地圖上算：劇情中每讀一句就重算(一次 0.1~0.2 秒)會一頓一頓的；回到地圖(OnMap 變了)自然會更新
+            bool map = OnMap();
+            string sig = $"{t.Year}/{t.Month}/{(int)t.Stage}/{(map ? Game.ReadCount() : -1)}/"
+                + $"{mm.ActiveSubMissions?.Count}/{mm.MainMissionStart}/{map}";
             if (sig == _signature)
                 return;
             _signature = sig;
@@ -217,7 +222,35 @@ namespace KnownUnknown
                 OnMenuStart(null);
         }
 
-        private static bool NotUnderWindow() => _instance == null || !_instance.MouseOverWindow();
+        // IMGUI 視窗擋不住遊戲的輸入：UI 按鈕/地圖地點走 EventSystem,對話推進走 Input System 的滑鼠動作。
+        // 滑鼠在視窗上時兩個都關掉(IMGUI 吃的是另一條平台事件，不受影響),移開再打開
+        private readonly List<EventSystem> _muted = new List<EventSystem>();
+        private bool _mouseOff;
+
+        private void BlockGameMouse(bool block)
+        {
+            if (block)
+            {
+                // 換場景會有新的 EventSystem;已經關掉的不用再記
+                foreach (EventSystem es in FindObjectsOfType<EventSystem>().Where(e => e.enabled))
+                {
+                    es.enabled = false;
+                    _muted.Add(es);
+                }
+                if (!_mouseOff && Mouse.current != null && Mouse.current.enabled)
+                {
+                    InputSystem.DisableDevice(Mouse.current);
+                    _mouseOff = true;
+                }
+                return;
+            }
+            foreach (EventSystem es in _muted.Where(x => x != null))
+                es.enabled = true;
+            _muted.Clear();
+            if (_mouseOff && Mouse.current != null)
+                InputSystem.EnableDevice(Mouse.current);
+            _mouseOff = false;
+        }
 
         // Input.mousePosition 原點在左下；視窗座標原點在左上、又被 GUI.matrix 縮放過
         private bool MouseOverWindow()
@@ -387,6 +420,20 @@ namespace KnownUnknown
             if (Force.Is(o) && OnMap())
                 Go(o);
             return Force.Is(o) ? "forced " + o.Label : "cleared";
+        }
+
+        // 測試用(dev 插件 invoke):把視窗移到滑鼠底下 / 移開，看遊戲的滑鼠輸入有沒有關掉
+        private string MouseTest(string under)
+        {
+            float scale = Screen.height / 1080f;
+            Vector2 m = Input.mousePosition;
+            Vector2 at = new Vector2(m.x / scale, (Screen.height - m.y) / scale);
+            if (under == "1")
+                _window.position = at - new Vector2(50, 50);
+            else if (under == "0")
+                _window.position = at + new Vector2(200, 200);
+            return $"mouse {at} window {_window} over {MouseOverWindow()} muted {_muted.Count} mouseOff {_mouseOff} "
+                + $"device {Mouse.current?.enabled} eventSystems {string.Join(",", FindObjectsOfType<EventSystem>().Select(e => e.enabled))}";
         }
 
         // 測試用(dev 插件 invoke):跟擲骰那一列的勾選框同一條路

@@ -386,11 +386,11 @@ namespace KnownUnknown
             return v.name;
         }
 
-        // 備註有的是多行的開發筆記，只取第一行。約 1/6 的旗標遊戲沒寫備註，代號(B00001)對玩家沒意義，後面會接取得處
+        // 備註有的是多行的開發筆記，只取第一行。約 1/6 的旗標遊戲沒寫備註，顯示「未命名旗標(B00001)」,代號留著給骰子大師等工具對照
         public static string FlagName(FlagData f)
         {
             string note = (f.DevNote ?? "").Split('\n')[0].Trim();
-            return note.Length == 0 ? "未命名旗標" : $"旗標「{note}」";
+            return note.Length == 0 ? $"未命名旗標({f.name})" : $"旗標「{note}」";
         }
     }
 }
