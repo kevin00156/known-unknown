@@ -409,6 +409,28 @@ def report(db, read, top, show_unreachable, only, spoil):
             print(f"  {cast} [{n}] {t} 句，已讀 {r}" + (f"\n    {why}" if why else "  (沒有入口)"))
 
 
+def write_system_flags(game, path):
+    """插件執行時只看得到 Lua 的 SetFlag/AddFlag;Lua 以外(戰鬥、商店、設施…)寫入的旗標由這裡產生清單。
+    兩邊都沒有的旗標 = 現版本拿不到，插件不提示。遊戲更新後重跑。"""
+    assets = Assets(game)
+    scripts = load_scripts(game)
+    lua = set()
+    for t in scripts.values():
+        lua |= {s.lower() for s in FLAG_WRITE_RE.findall(t)}
+    names = sorted({assets.tt(o)["m_Name"] for o in assets.by_cls["FlagData"]})
+    written = written_flags(assets, scripts)
+    system = [n for n in names if n.lower() in written and n.lower() not in lua]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("// 由 known_unknown.py --system-flags 產生，別手改。遊戲更新後重跑。\n")
+        f.write("namespace KnownUnknown\n{\n    internal static class SystemFlags\n    {\n")
+        f.write("        // Lua 以外(戰鬥、商店、設施、任務…)會寫入的旗標\n")
+        f.write("        public static readonly string[] Names =\n        {\n")
+        for n in system:
+            f.write(f'            "{n}",\n')
+        f.write("        };\n    }\n}\n")
+    print(f"{len(system)} 個旗標 → {path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--game", default=GAME)
@@ -420,7 +442,12 @@ def main():
     ap.add_argument("--unreachable", action="store_true", help="列出判定為不可達的劇本與原因")
     ap.add_argument("--spoil", action="store_true", help="顯示每段白字的開頭第一句(輕微劇透)")
     ap.add_argument("--dump-scripts", metavar="DIR", help="把劇本(story/chinesetraditional)匯出成 DIR/<名>.lua 後結束")
+    ap.add_argument("--system-flags", metavar="CS", help="產生插件用的「只由遊戲系統寫入的旗標」清單(C#)後結束")
     a = ap.parse_args()
+
+    if a.system_flags:
+        write_system_flags(a.game, a.system_flags)
+        return
 
     if a.dump_scripts:
         os.makedirs(a.dump_scripts, exist_ok=True)

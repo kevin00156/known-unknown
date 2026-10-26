@@ -24,6 +24,7 @@ namespace KnownUnknown
         private ConfigEntry<bool> _menuHints;
         private ConfigEntry<bool> _mapHints;
         private ConfigEntry<CountUnit> _countUnit;
+        private ConfigEntry<bool> _showLocked;
         private Harmony _harmony;
 
         // 劇本索引：讀檔在主執行緒，解析在背景
@@ -55,6 +56,14 @@ namespace KnownUnknown
             _mapHints = Config.Bind("General", "MapHints", true, "在自由行動地圖上，顯示本旬去哪裡能看到白字");
             _countUnit = Config.Bind("General", "CountUnit", CountUnit.Both,
                 "白字怎麼算：Events = 幾段劇情(還有白字的事件/結果),Lines = 幾句台詞,Both = 兩個都顯示");
+            _showLocked = Config.Bind("General", "ShowLocked", false,
+                "也列出目前條件不足的白字和需要的條件(好感、屬性、旗標從哪拿)。會劇透有哪些劇情。現版本拿不到的永遠不列");
+            Hints.ShowLocked = _showLocked.Value;
+            _showLocked.SettingChanged += (_, __) =>
+            {
+                Hints.ShowLocked = _showLocked.Value;
+                _signature = null;
+            };
             Tally.Unit = _countUnit.Value;
             _countUnit.SettingChanged += (_, __) =>
             {
@@ -147,7 +156,11 @@ namespace KnownUnknown
             // 寫進 BepInEx 日誌，方便對照驗證
             Logger.LogInfo($"[本旬] {t.Year}年{t.Month}月{t.Stage} " + _summary + (_hints.HasResults ? "" : "(尚無地點事件表)"));
             foreach (Hint h in _list)
-                Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {h.Count} | {h.Detail}");
+            {
+                Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {(h.Count.Any ? h.Count.ToString() : "")} | {h.Detail}");
+                foreach (string l in h.Locked)
+                    Logger.LogInfo($"[本旬]     未開放 {l}");
+            }
         }
 
         // 進劇情時地點事件表才載入，趁這時抓
@@ -181,10 +194,16 @@ namespace KnownUnknown
             try
             {
                 string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
-                string info = p._hints.ForOption(script, text, out string detail);
-                p.Logger.LogInfo($"[選單] {script} | {text} → {info ?? "(不認得)"} {detail}");
-                if (info != null)
-                    p._menuLines.Add(new KeyValuePair<string, string>(Text.OptionLabel(text), info));
+                OptionHint hint = p._hints.ForOption(script, text);
+                p.Logger.LogInfo($"[選單] {script} | {text} → {hint?.Text ?? "(不認得)"} {hint?.Detail}");
+                if (hint == null)
+                    return;
+                p._menuLines.Add(new KeyValuePair<string, string>(Text.OptionLabel(text), hint.Text));
+                foreach (string l in hint.Locked)
+                {
+                    p.Logger.LogInfo($"[選單]   未開放 {l}");
+                    p._menuLines.Add(new KeyValuePair<string, string>("", Locked + l));
+                }
             }
             catch (Exception e)
             {
@@ -208,7 +227,7 @@ namespace KnownUnknown
             if (_small == null)
             {
                 // 預設 fontSize 是 0(=字型預設大小),不能拿來加減
-                _small = new GUIStyle(GUI.skin.label);
+                _small = new GUIStyle(GUI.skin.label) { wordWrap = true };
                 _small.normal.textColor = new Color(0.8f, 0.8f, 0.8f);
             }
             float scale = Screen.height / 1080f;
@@ -222,19 +241,30 @@ namespace KnownUnknown
         }
 
         // 右上角小框，避開左上角的心相/行動列
+        private const string Locked = "未開放 ";
+
+        // 右上角小框，高度跟著內容(條件說明會換行)
         private void DrawBox(string title, List<KeyValuePair<string, string>> lines)
         {
-            float width = 520;
+            float width = 600;
             float right = Screen.width * 1080f / Screen.height;   // GUI.matrix 縮放後的畫面寬
-            GUILayout.BeginArea(new Rect(right - width - 20, 150, width, 40 + 30 * lines.Count), GUI.skin.box);
+            GUILayout.BeginArea(new Rect(right - width - 20, 150, width, 1080 - 200));
+            GUILayout.BeginVertical(GUI.skin.box);
             GUILayout.Label(title);
             foreach (KeyValuePair<string, string> l in lines)
             {
+                // 沒有標籤的列(未開放的說明)佔滿整行
+                if (l.Key.Length == 0)
+                {
+                    GUILayout.Label("    " + l.Value, _small);
+                    continue;
+                }
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(l.Key, GUILayout.Width(220));
+                GUILayout.Label(l.Key, GUILayout.Width(200));
                 GUILayout.Label(l.Value, l.Value == "已看完" ? _small : GUI.skin.label);
                 GUILayout.EndHorizontal();
             }
+            GUILayout.EndVertical();
             GUILayout.EndArea();
         }
 
@@ -269,9 +299,11 @@ namespace KnownUnknown
                 GUILayout.Label(h.Where);
                 GUILayout.FlexibleSpace();
                 GUILayout.Label(h.Chance, GUILayout.Width(60));
-                GUILayout.Label(h.Count.ToString(), GUILayout.Width(110));
+                GUILayout.Label(h.Count.Any ? h.Count.ToString() : "", GUILayout.Width(110));
                 GUILayout.EndHorizontal();
                 GUILayout.Label("    " + h.Detail, _small);
+                foreach (string l in h.Locked)
+                    GUILayout.Label("    " + Locked + l, _small);
             }
             GUILayout.EndScrollView();
             GUILayout.Label($"機率 = 這一旬去一次會抽到沒看過結果的機率(會隨屬性/旗標變)。會自動更新，按 {_toggleKey.Value} 關閉。");

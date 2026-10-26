@@ -29,6 +29,7 @@ namespace KnownUnknown
         Key,       // say(luamanager.GetStoryText("K"))
         Script,    // SetNextScript / SetCurrentStoryScript / SetCurrentTravelScript / SetTempScript
         Position,  // checkpointmanager.Position("X"):地點事件表，執行時才抽出結果劇本
+        Flag,      // statmodifymanager.SetFlag("F", n) / AddFlag("F", n)
     }
 
     internal struct Item
@@ -36,6 +37,8 @@ namespace KnownUnknown
         public ItemKind Kind;
         public string Value;
         public Guard[] Guards;
+        public int Number;    // Flag:設成/加上多少
+        public bool Add;      // Flag:AddFlag
     }
 
     // 一份劇本解析後的樣子
@@ -70,7 +73,13 @@ namespace KnownUnknown
         // 地點事件表名 -> 從選單哪個選項進去(選項字串)
         private readonly Dictionary<string, string> _actions = new Dictionary<string, string>();
 
+        // 旗標 -> 會寫入它的劇本(Lua SetFlag/AddFlag)
+        private readonly Dictionary<string, HashSet<string>> _flagWriters = new Dictionary<string, HashSet<string>>();
+
         public int TotalKeys { get; private set; }
+
+        public IEnumerable<string> FlagWriters(string flag) =>
+            _flagWriters.TryGetValue(flag, out HashSet<string> w) ? w : Enumerable.Empty<string>();
 
         // 只能在主執行緒呼叫(Unity API)
         public static KeyValuePair<string, string>[] Load()
@@ -93,8 +102,16 @@ namespace KnownUnknown
                 _scripts[s.Key] = p;
                 TotalKeys += p.Items.Count(i => i.Kind == ItemKind.Key);
             }
-            foreach (Script p in _scripts.Values)
-                IndexActions(p);
+            foreach (KeyValuePair<string, Script> p in _scripts)
+            {
+                IndexActions(p.Value);
+                foreach (Item i in p.Value.Items.Where(i => i.Kind == ItemKind.Flag))
+                {
+                    if (!_flagWriters.TryGetValue(i.Value, out HashSet<string> w))
+                        _flagWriters[i.Value] = w = new HashSet<string>();
+                    w.Add(p.Key);
+                }
+            }
         }
 
         public bool Has(string script) => _scripts.ContainsKey(script);
@@ -122,6 +139,28 @@ namespace KnownUnknown
                     if (i.Kind == ItemKind.Script && Has(i.Value) && !_stop.Contains(i.Value) && seen.Add(i.Value))
                         queue.Enqueue(i.Value);
                     yield return i;
+                }
+            }
+        }
+
+        // 同 Walk 但不過濾，每一項附上「從 start 走到它」沿途所有的分支條件(跳轉所在分支 + 自己所在分支)
+        public IEnumerable<KeyValuePair<Item, Guard[]>> Paths(string start)
+        {
+            HashSet<string> seen = new HashSet<string> { start };
+            Queue<KeyValuePair<string, Guard[]>> queue = new Queue<KeyValuePair<string, Guard[]>>();
+            queue.Enqueue(new KeyValuePair<string, Guard[]>(start, new Guard[0]));
+            while (queue.Count > 0)
+            {
+                KeyValuePair<string, Guard[]> at = queue.Dequeue();
+                Script s = Get(at.Key);
+                if (s == null)
+                    continue;
+                foreach (Item i in s.Items)
+                {
+                    Guard[] path = at.Value.Length == 0 ? i.Guards : at.Value.Concat(i.Guards).ToArray();
+                    if (i.Kind == ItemKind.Script && Has(i.Value) && !_stop.Contains(i.Value) && seen.Add(i.Value))
+                        queue.Enqueue(new KeyValuePair<string, Guard[]>(i.Value, path));
+                    yield return new KeyValuePair<Item, Guard[]>(i, path);
                 }
             }
         }
@@ -250,6 +289,8 @@ namespace KnownUnknown
 
                 Collect(l, "GetStoryText(\"", ItemKind.Key, guards, items);
                 Collect(l, "checkpointmanager.Position(\"", ItemKind.Position, guards, items);
+                CollectFlag(l, "statmodifymanager.SetFlag(\"", false, guards, items);
+                CollectFlag(l, "statmodifymanager.AddFlag(\"", true, guards, items);
                 foreach (string t in Transitions)
                     Collect(l, t, ItemKind.Script, guards, items);
             }
@@ -280,6 +321,22 @@ namespace KnownUnknown
                     arg = arg.ToLowerInvariant();
                 items.Add(new Item { Kind = kind, Value = arg, Guards = guards });
             }
+        }
+
+        // SetFlag("F", 1) / AddFlag("F", -1);數字不是常數(SetFlag("F", var1))就不記
+        private static void CollectFlag(string line, string call, bool add, Guard[] guards, List<Item> items)
+        {
+            int at = line.IndexOf(call);
+            if (at < 0)
+                return;
+            string rest = line.Substring(at + call.Length - 1);
+            string name = Arg(rest, 0);
+            int comma = rest.IndexOf(',');
+            int close = rest.IndexOf(')');
+            if (name == null || comma < 0 || close < comma
+                || !int.TryParse(rest.Substring(comma + 1, close - comma - 1).Trim(), out int n))
+                return;
+            items.Add(new Item { Kind = ItemKind.Flag, Value = name, Guards = guards, Number = n, Add = add });
         }
 
         // s 裡第一個 "…" 的內容
