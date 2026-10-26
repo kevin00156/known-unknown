@@ -1,12 +1,12 @@
-# lom-unread
+# known-unknown(多玩10塊錢)
 
 活俠傳(Legend of Mortal)未讀劇情盤點：列出哪些劇本還有白字，並排除現版本拿不到的劇本。
 
 ```
-uv run python lom_unread.py               # 自動找最新的 Save_universe.json
-uv run python lom_unread.py --top 0       # 全列
-uv run python lom_unread.py --unreachable # 順便列出判定不可達的劇本
-uv run python lom_unread.py --rebuild     # 遊戲更新後重建 lom-db.json
+uv run python known_unknown.py               # 自動找最新的 Save_universe.json
+uv run python known_unknown.py --top 0       # 全列
+uv run python known_unknown.py --unreachable # 順便列出判定不可達的劇本
+uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
 ```
 
 ## 原理

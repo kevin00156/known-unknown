@@ -177,7 +177,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--game", default=GAME)
     ap.add_argument("--save", help="Save_universe.json(預設自動找最新)")
-    ap.add_argument("--cache", default=os.path.join(os.path.dirname(__file__), "lom-db.json"))
+    ap.add_argument("--cache", default=os.path.join(os.path.dirname(__file__), "ku-db.json"))
     ap.add_argument("--rebuild", action="store_true", help="遊戲更新後重建劇本快取")
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument("--unreachable", action="store_true", help="列出判定為不可達的劇本")
