@@ -19,7 +19,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.12.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.12.3")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -225,8 +225,10 @@ namespace KnownUnknown
         }
 
         // IMGUI 視窗擋不住遊戲的輸入：UI 按鈕/地圖地點走 EventSystem,對話推進走 Input System 的滑鼠動作。
-        // 滑鼠在視窗上時兩個都關掉(IMGUI 吃的是另一條平台事件，不受影響),移開再打開
-        private readonly List<EventSystem> _muted = new List<EventSystem>();
+        // 滑鼠在視窗上時兩個都關掉(IMGUI 吃的是另一條平台事件，不受影響),移開再打開。
+        // 關的是 EventSystem 底下的 input module,不是 EventSystem 本身：EventSystem 關掉 EventSystem.current 就變 null,
+        // 遊戲的 MenuDialog.AddOption 會 NRE(在視窗裡勾「直接去」時選單正好在滑鼠還在視窗上時建立，選項沒填、劇情卡死)
+        private readonly List<BaseInputModule> _muted = new List<BaseInputModule>();
         private bool _mouseOff;
 
         private void BlockGameMouse(bool block)
@@ -234,10 +236,10 @@ namespace KnownUnknown
             if (block)
             {
                 // 換場景會有新的 EventSystem;已經關掉的不用再記
-                foreach (EventSystem es in FindObjectsOfType<EventSystem>().Where(e => e.enabled))
+                foreach (BaseInputModule m in FindObjectsOfType<BaseInputModule>().Where(x => x.enabled))
                 {
-                    es.enabled = false;
-                    _muted.Add(es);
+                    m.enabled = false;
+                    _muted.Add(m);
                 }
                 if (!_mouseOff && Mouse.current != null && Mouse.current.enabled)
                 {
@@ -246,8 +248,8 @@ namespace KnownUnknown
                 }
                 return;
             }
-            foreach (EventSystem es in _muted.Where(x => x != null))
-                es.enabled = true;
+            foreach (BaseInputModule m in _muted.Where(x => x != null))
+                m.enabled = true;
             _muted.Clear();
             if (_mouseOff && Mouse.current != null)
                 InputSystem.EnableDevice(Mouse.current);
@@ -454,7 +456,7 @@ namespace KnownUnknown
             else if (under == "0")
                 _window.position = at + new Vector2(200, 200);
             return $"mouse {at} window {_window} over {MouseOverWindow()} muted {_muted.Count} mouseOff {_mouseOff} "
-                + $"device {Mouse.current?.enabled} eventSystems {string.Join(",", FindObjectsOfType<EventSystem>().Select(e => e.enabled))}";
+                + $"device {Mouse.current?.enabled} inputModules {string.Join(",", FindObjectsOfType<BaseInputModule>().Select(x => x.enabled))}";
         }
 
         // 測試用(dev 插件 invoke):跟擲骰那一列的勾選框同一條路

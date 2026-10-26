@@ -77,8 +77,8 @@ namespace KnownUnknown
 
         private readonly Dictionary<string, SwitchResultData> _switches = new Dictionary<string, SwitchResultData>();
         private readonly Dictionary<string, ConditionResultData> _conditions = new Dictionary<string, ConditionResultData>();
-        private readonly Dictionary<string, int> _switchMemo = new Dictionary<string, int>();
-        private readonly Dictionary<string, bool?> _conditionMemo = new Dictionary<string, bool?>();
+        private Dictionary<string, int> _switchMemo = new Dictionary<string, int>();
+        private Dictionary<string, bool?> _conditionMemo = new Dictionary<string, bool?>();
 
         // 假設某些旗標已經是某個值(「去拿這個旗標之後會怎樣」)。null = 照遊戲現況
         private Dictionary<FlagData, int> _assume;
@@ -113,6 +113,48 @@ namespace KnownUnknown
             _assume = flags;
             Forget();
         }
+
+        // 這些旗標各自可能是現在的值或 values 裡的值，有沒有一組讓分支成立。外面的 Assume 和快取原樣留著
+        public bool CanHold(Guard g, Dictionary<FlagData, HashSet<int>> values)
+        {
+            Dictionary<FlagData, int> outer = _assume;
+            Dictionary<string, int> switchMemo = _switchMemo;
+            Dictionary<string, bool?> conditionMemo = _conditionMemo;
+            try
+            {
+                List<KeyValuePair<FlagData, int[]>> xs = values
+                    .Select(x => new KeyValuePair<FlagData, int[]>(x.Key, x.Value.Append(State(x.Key, outer)).Distinct().ToArray()))
+                    .ToList();
+                return Try(g, xs, 0, outer == null ? new Dictionary<FlagData, int>() : new Dictionary<FlagData, int>(outer));
+            }
+            finally
+            {
+                _assume = outer;
+                _switchMemo = switchMemo;
+                _conditionMemo = conditionMemo;
+            }
+        }
+
+        private bool Try(Guard g, List<KeyValuePair<FlagData, int[]>> xs, int i, Dictionary<FlagData, int> assume)
+        {
+            if (i == xs.Count)
+            {
+                _assume = assume;
+                _switchMemo = new Dictionary<string, int>();
+                _conditionMemo = new Dictionary<string, bool?>();
+                return Holds(g) != false;
+            }
+            foreach (int v in xs[i].Value)
+            {
+                assume[xs[i].Key] = v;
+                if (Try(g, xs, i + 1, assume))
+                    return true;
+            }
+            return false;
+        }
+
+        private static int State(FlagData f, Dictionary<FlagData, int> assume) =>
+            assume != null && assume.TryGetValue(f, out int v) ? v : f.State;
 
         // Switch 現在會回傳第幾個分支；-1 = 找不到(當成都可能)
         public int Switch(string name)
@@ -220,7 +262,7 @@ namespace KnownUnknown
                     FlagData f = FlagOf(r);
                     if (f == null)
                         return 0;
-                    return sign * (_assume != null && _assume.TryGetValue(f, out int assumed) ? assumed : f.State);
+                    return sign * State(f, _assume);
                 default:
                     return r.GetValue();
             }

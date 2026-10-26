@@ -148,7 +148,7 @@ namespace KnownUnknown
             "", "Mall", "Center", "Alchemy", "Forge", "BackMountain", "Room1", "Door", "Study", "Kitchen", "Room2", "Secret",
         };
 
-        private static readonly HashSet<string> NoFlags = new HashSet<string>();
+        private static readonly Dictionary<string, HashSet<int>> NoFlags = new Dictionary<string, HashSet<int>>();
 
         public Hints(StoryIndex index)
         {
@@ -174,11 +174,11 @@ namespace KnownUnknown
         // ---- 一個入口看得到 / 看不到的白字 ----
 
         // paths:入口走得到的每一項和沿途條件。同一段劇情裡自己會寫入的旗標(暫存旗標、前面選項設的)
-        // 現在還沒設，但演到那裡時可能已經設了，所以只用到這些旗標的條件當成可能成立。
+        // 現在還沒設，但演到那裡時可能已經設了，所以只用到這些旗標的條件，拿寫入的值能成立就當成可能成立。
         private Outlook Look(IEnumerable<KeyValuePair<Item, Guard[]>> paths)
         {
             List<KeyValuePair<Item, Guard[]>> all = paths.ToList();
-            HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
+            Dictionary<string, HashSet<int>> inStory = Written(all);
             Outlook o = new Outlook();
             foreach (KeyValuePair<Item, Guard[]> x in all)
             {
@@ -194,7 +194,8 @@ namespace KnownUnknown
                 bool closed = blockers.Any(g => _cond.Impossible(g, Obtainable));
                 if (closed && !ShowLocked)
                     continue;
-                string why = string.Join(";還要 ", blockers.Select(g => _cond.Need(g, FlagSource)).Where(w => w != null).Distinct());
+                List<string> needs = blockers.Select(g => _cond.Need(g, FlagSource)).Where(w => w != null).Distinct().ToList();
+                string why = string.Join(";還要 ", Absorb(needs));
                 if (!o.Locked.TryGetValue(why, out HashSet<string> keys))
                     o.Locked[why] = keys = new HashSet<string>();
                 if (closed)
@@ -210,12 +211,40 @@ namespace KnownUnknown
 
         private Outlook Look(string script) => Look(_index.Paths(script));
 
-        private bool Blocks(Guard g, HashSet<string> inStory)
+        // A 且 (A 或 B) = A:另一個條件正好是某個「或」的其中一項，那個「或」不用列
+        private static IEnumerable<string> Absorb(List<string> needs) =>
+            needs.Where(n => !needs.Any(m => m != n && n.Split(new[] { " 或 " }, System.StringSplitOptions.None).Contains(m)));
+
+        // 條件只用到這段劇情自己會寫的旗標：拿寫進去的值試，有一組成立才不算擋。
+        // 只看「有寫」不看值會誤判：ch6_4_1 開頭 SetFlag("M60010", 0),後面 Switch 要 M60010 = 1,永遠不成立
+        private bool Blocks(Guard g, Dictionary<string, HashSet<int>> inStory)
         {
             if (_cond.Holds(g) != false)
                 return false;
             List<FlagData> flags = _cond.Flags(g).ToList();
-            return flags.Count == 0 || !flags.All(f => inStory.Contains(f.name));
+            if (flags.Count == 0 || !flags.All(f => inStory.ContainsKey(f.name)))
+                return true;
+            if (flags.Any(f => inStory[f.name] == null))
+                return false;
+            return !_cond.CanHold(g, flags.ToDictionary(f => f, f => inStory[f.name]));
+        }
+
+        // 這段劇情會寫入的旗標 → 寫入的值；有 AddFlag 的值不固定，記 null(當成什麼值都可能)
+        private static Dictionary<string, HashSet<int>> Written(IEnumerable<KeyValuePair<Item, Guard[]>> all)
+        {
+            Dictionary<string, HashSet<int>> w = new Dictionary<string, HashSet<int>>();
+            foreach (Item i in all.Select(x => x.Key).Where(i => i.Kind == ItemKind.Flag))
+            {
+                if (w.TryGetValue(i.Value, out HashSet<int> vs) && vs == null)
+                    continue;
+                if (i.Add)
+                    w[i.Value] = null;
+                else if (vs == null)
+                    w[i.Value] = new HashSet<int> { i.Number };
+                else
+                    vs.Add(i.Number);
+            }
+            return w;
         }
 
         // 這個旗標拿得到嗎：Lua 有寫入，或遊戲系統會寫入
@@ -248,14 +277,14 @@ namespace KnownUnknown
             {
                 string script = ScriptOf(pr, x.Key);
                 Outlook o = Look(script);
-                roll.Locked.AddRange(o.LockedLines($"抽到「{Label(x.Key)}」"));
+                roll.Locked.AddRange(o.LockedLines($"抽到「{Label(pr, x.Key)}」"));
                 string cast0 = _index.Cast(script, 2);
                 if (o.Open.Count > 0 || o.Locked.Count > 0)
                     roll.Outcomes.Add(new Outcome
                     {
                         Table = pr,
                         Type = x.Key.ResultType,
-                        Label = $"抽到「{Label(x.Key)}」{100 * x.Value / sum}%" + (cast0.Length > 0 ? $"({cast0})" : ""),
+                        Label = $"抽到「{Label(pr, x.Key)}」{100 * x.Value / sum}%" + (cast0.Length > 0 ? $"({cast0})" : ""),
                         Count = o.Count,
                         Locked = o.LockedLines().ToList(),
                     });
@@ -264,7 +293,7 @@ namespace KnownUnknown
                 hit += x.Value;
                 roll.Count += o.Count;
                 string cast = _index.Cast(script, 2);
-                roll.Unseen.Add($"{Label(x.Key)} {100 * x.Value / sum}%" + (cast.Length > 0 ? $"({cast})" : ""));
+                roll.Unseen.Add($"{Label(pr, x.Key)} {100 * x.Value / sum}%" + (cast.Length > 0 ? $"({cast})" : ""));
             }
             roll.Chance = sum == 0 ? 0 : 100 * hit / sum;
             roll.Locked = roll.Locked.Distinct().ToList();
@@ -450,7 +479,7 @@ namespace KnownUnknown
             public string Key;
             public Guard[] Guards;
             public string Root;
-            public HashSet<string> InStory;   // 這個入口自己會寫入的旗標
+            public Dictionary<string, HashSet<int>> InStory;   // 這個入口自己會寫入的旗標和值
             public HashSet<string> Flags;     // 沿途條件牽涉到的旗標
         }
 
@@ -470,7 +499,7 @@ namespace KnownUnknown
                     {
                         Table = t.Table,
                         Type = e.Key.ResultType,
-                        Label = $"{t.Where}抽到「{Label(e.Key)}」({100 * e.Value / sum}%)",
+                        Label = $"{t.Where}抽到「{Label(t.Table, e.Key)}」({100 * e.Value / sum}%)",
                     }, ScriptOf(t.Table, e.Key));
             }
             foreach (MissionCheckData m in ActiveMissions())
@@ -543,7 +572,7 @@ namespace KnownUnknown
             foreach (string root in roots.Where(_index.Has))
             {
                 List<KeyValuePair<Item, Guard[]>> all = _index.Paths(root).ToList();
-                HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
+                Dictionary<string, HashSet<int>> inStory = Written(all);
                 foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => StoryIndex.Seeable(x.Key.Kind)))
                 {
                     HashSet<string> flags = new HashSet<string>(x.Value.SelectMany(Names));
@@ -565,7 +594,7 @@ namespace KnownUnknown
             foreach (KeyValuePair<Outcome, string> e in TurnEntries())
             {
                 List<KeyValuePair<Item, Guard[]>> all = _index.Paths(e.Value).ToList();
-                HashSet<string> inStory = new HashSet<string>(all.Where(x => x.Key.Kind == ItemKind.Flag).Select(x => x.Key.Value));
+                Dictionary<string, HashSet<int>> inStory = Written(all);
                 foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => x.Key.Kind == ItemKind.Flag))
                 {
                     if (!_flags.TryGetValue(x.Key.Value, out FlagData f) || Temporary(f) || x.Value.Any(g => Blocks(g, inStory)))
@@ -664,7 +693,7 @@ namespace KnownUnknown
                     string action = _index.ActionOf(i.Value);
                     string where = name + (action == null ? "" : $"「{Text.OptionLabel(action)}」");
                     foreach (PositionEventData e in pr.List.Where(e => e != null))
-                        Mark(ScriptOf(pr, e), $"{where}抽到「{Label(e)}」");
+                        Mark(ScriptOf(pr, e), $"{where}抽到「{Label(pr, e)}」");
                 }
                 Mark(start, name);
             }
@@ -701,10 +730,19 @@ namespace KnownUnknown
         private static string ScriptOf(PositionResultData p, PositionEventData e) =>
             (Traverse.Create(p).Field("_scriptPrefix").GetValue<string>() + "_" + e.ResultType).ToLowerInvariant();
 
-        // 結果的中文名:StoryMappingItem.Key 是「大失敗_001」這種，去掉尾碼
-        private static string Label(PositionEventData e)
+        // 結果的中文名:StoryMappingItem.Key 是「大失敗_001」這種，去掉尾碼；
+        // 同一張表有兩個「正常」(正常_001、正常_002)就留著尾碼，不然看起來像同一個結果列了兩次
+        private static string Label(PositionResultData pr, PositionEventData e)
         {
-            string key = Traverse.Create(e).Field("_config").Field("Key").GetValue<string>() ?? e.name;
+            string key = Key(e);
+            return pr.List.Count(x => x != null && Stem(Key(x)) == Stem(key)) > 1 ? key : Stem(key);
+        }
+
+        private static string Key(PositionEventData e) =>
+            Traverse.Create(e).Field("_config").Field("Key").GetValue<string>() ?? e.name;
+
+        private static string Stem(string key)
+        {
             int i = key.LastIndexOf('_');
             return i > 0 ? key.Substring(0, i) : key;
         }
