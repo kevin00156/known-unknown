@@ -11,7 +11,7 @@ namespace KnownUnknown
     internal enum GuardKind
     {
         Switch,  // local r = checkpointmanager.Switch("S") … if r == N:遊戲狀態決定，可即時判斷
-        Choice,  // local c = choose(arr) … if c == N:玩家選第 N 個選項
+        Choice,  // local c = choose(arr) … if c == N:玩家選第 N 個選項；擲骰(ExecuteRoll(arr…) 後 local c = dicemenudialog.ResultSelection)也是
         Random,  // 骰子、math.random:一律當成可能
     }
 
@@ -189,7 +189,8 @@ namespace KnownUnknown
                 {
                     KeyValuePair<string, KeyValuePair<string, int>> o = s.Options.FirstOrDefault(x =>
                         x.Value.Key == g.Name && x.Value.Value == g.Value);
-                    if (o.Key != null && !_actions.ContainsKey(i.Value))
+                    // 擲骰的選項(「O_xxx|>=60」)不是玩家選的行動
+                    if (o.Key != null && !o.Key.Contains('|') && !_actions.ContainsKey(i.Value))
                         _actions[i.Value] = o.Key;
                 }
             }
@@ -209,6 +210,7 @@ namespace KnownUnknown
             Dictionary<string, string> chooses = new Dictionary<string, string>();   // choice 變數 -> 陣列
             Dictionary<string, string> conds = new Dictionary<string, string>();     // 變數 -> Condition 名
             Dictionary<string, string> gates = new Dictionary<string, string>();     // "陣列[第幾個]" -> Condition 名
+            string roll = null;                                                       // 最近一次 ExecuteRoll 的選項陣列
             List<KeyValuePair<int, Guard?>> stack = new List<KeyValuePair<int, Guard?>>();
             Guard[] guards = new Guard[0];
 
@@ -262,6 +264,11 @@ namespace KnownUnknown
                         vars[name] = new Guard { Kind = GuardKind.Choice, Name = name };
                         chooses[name] = rhs.Substring(7, rhs.IndexOf(')') - 7);
                     }
+                    else if (rhs == "dicemenudialog.ResultSelection" && roll != null)
+                    {
+                        vars[name] = new Guard { Kind = GuardKind.Choice, Name = name };
+                        chooses[name] = roll;
+                    }
                     else if (rhs.StartsWith("checkpointmanager.Condition(\""))
                         conds[name] = Arg(rhs, 0);
                     else
@@ -286,6 +293,12 @@ namespace KnownUnknown
                             gates[$"{arr}[{idx}]"] = cond;
                     }
                 }
+
+                // runwait(dicemenudialog.ExecuteRoll(dice_001, 1, "Ch_7_3_2_3_001"))
+                const string execRoll = "dicemenudialog.ExecuteRoll(";
+                int er = l.IndexOf(execRoll);
+                if (er >= 0)
+                    roll = l.Substring(er + execRoll.Length).Split(',')[0].Trim();
 
                 Collect(l, "GetStoryText(\"", ItemKind.Key, guards, items);
                 Collect(l, "checkpointmanager.Position(\"", ItemKind.Position, guards, items);
@@ -359,6 +372,10 @@ namespace KnownUnknown
         //   "talk+talk+角色" → 和角色交談
         public static string OptionLabel(string option)
         {
+            // 擲骰選項「O_xxx|>=60」
+            int bar = option.IndexOf('|');
+            if (bar > 0)
+                return $"{OptionLabel(option.Substring(0, bar))}({option.Substring(bar + 1)})";
             string[] p = option.TrimStart('~').Split('+');
             if (p.Length > 2 && (p[1] == "work" || p[1] == "free"))
                 return Get("Position/title/" + p[2], p[2]);

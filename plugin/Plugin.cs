@@ -16,7 +16,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.7.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.8.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -51,6 +51,10 @@ namespace KnownUnknown
         private Button _goButton;
         private float _goAt;
 
+        // 擲骰：每個結果選了會看到什麼。換一次擲骰(選項陣列換了)或切換「顯示未開放」才重算
+        private string[] _diceFor;
+        private List<OptionHint> _diceHints = new List<OptionHint>();
+
         private GUIStyle _small;
         private GUIStyle _windowStyle;
         private GUIStyle _picked;
@@ -69,13 +73,14 @@ namespace KnownUnknown
             {
                 Hints.ShowLocked = _showLocked.Value;
                 _signature = null;
+                _diceFor = null;
                 RefreshMenu();
             };
             _allowForce = Config.Bind("General", "AllowForce", true,
                 "在清單裡雙擊地點事件的結果 = 指定下次去那裡一定抽到它(再雙擊取消);在地圖上雙擊會直接替你點地點、選行動。會改變遊戲結果，不想要就關掉");
-            Force.Enabled = _allowForce.Value;
-            _allowForce.SettingChanged += (_, __) => Force.Enabled = _allowForce.Value;
-            Force.Log = m => Logger.LogInfo(m);
+            Force.Enabled = Dice.Enabled = _allowForce.Value;
+            _allowForce.SettingChanged += (_, __) => Force.Enabled = Dice.Enabled = _allowForce.Value;
+            Force.Log = Dice.Log = m => Logger.LogInfo(m);
             Tally.Unit = _countUnit.Value;
             _countUnit.SettingChanged += (_, __) =>
             {
@@ -90,6 +95,11 @@ namespace KnownUnknown
             _harmony = new Harmony("known-unknown");
             _harmony.Patch(addOption, postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterAddOption)));
             Force.Patch(_harmony);
+            Dice.Patch(_harmony);
+            // IMGUI 視窗擋不住 EventSystem:沒擋的話，雙擊的第一下會穿過視窗點到後面的地點
+            foreach (string m in new[] { "OnPointerClick", "OnPointerEnter" })
+                _harmony.Patch(AccessTools.Method(typeof(PositionCollider), m),
+                    prefix: new HarmonyMethod(typeof(Plugin), nameof(NotUnderWindow)));
             MenuSignals.OnMenuStart += OnMenuStart;
             MenuSignals.OnMenuEnd += OnMenuEnd;
             SceneManager.sceneLoaded += OnSceneLoaded;
@@ -204,6 +214,18 @@ namespace KnownUnknown
         {
             if (menu == _menu)
                 OnMenuStart(null);
+        }
+
+        private static bool NotUnderWindow() => _instance == null || !_instance.MouseOverWindow();
+
+        // Input.mousePosition 原點在左下；視窗座標原點在左上、又被 GUI.matrix 縮放過
+        private bool MouseOverWindow()
+        {
+            if (!_show)
+                return false;
+            float scale = Screen.height / 1080f;
+            Vector2 m = Input.mousePosition;
+            return _window.Contains(new Vector2(m.x / scale, (Screen.height - m.y) / scale));
         }
 
         // 參數名要和原方法一致(text / interactable),Harmony 靠名字對應
@@ -342,6 +364,15 @@ namespace KnownUnknown
             return Force.Is(o) ? "forced " + o.Label : "cleared";
         }
 
+        // 測試用(dev 插件 invoke):跟擲骰那一列雙擊同一條路
+        private string ToggleDice(string k)
+        {
+            if (!Dice.Active)
+                return "no dice";
+            Dice.Toggle(int.Parse(k));
+            return $"target {Dice.Target} faces {string.Join(",", Dice.Faces())}";
+        }
+
         // 選單開著時：每個選項選了會看到什麼
         private void DrawMenu()
         {
@@ -353,6 +384,42 @@ namespace KnownUnknown
                 GUILayout.Label(o.Value.Text, o.Value.Text == "已看完" ? _small : GUI.skin.label);
                 GUILayout.EndHorizontal();
                 foreach (string l in o.Value.Locked)
+                    GUILayout.Label("      " + Locked + l, _small);
+            }
+            GUILayout.Space(10);
+        }
+
+        // 擲骰時：每個結果的機率、看到什麼；雙擊指定擲出它
+        private void DrawDice()
+        {
+            if (_diceFor != Dice.Options)
+            {
+                _diceFor = Dice.Options;
+                string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
+                _diceHints = Dice.Options.Select(o => _hints.ForOption(script, o)).ToList();
+            }
+            int[] faces = Dice.Faces();
+            int total = faces.Sum();
+            GUILayout.Label("這次擲骰 — 機率、會看到" + (_allowForce.Value ? "(雙擊指定擲出它)" : ""));
+            for (int i = 0; i < Dice.Options.Length; i++)
+            {
+                int k = i + 1;
+                OptionHint h = _diceHints[i];
+                bool on = Dice.Target == k;
+                string chance = faces[k] == 0 ? "擲不到" : $"{100 * faces[k] / Math.Max(total, 1)}%";
+                GUILayout.BeginHorizontal();
+                GUILayout.Label($"  {(on ? "★ " : "")}{Text.OptionLabel(Dice.Options[i])}", on ? _picked : GUI.skin.label, GUILayout.Width(330));
+                GUILayout.Label(chance, GUILayout.Width(60));
+                GUILayout.Label(h?.Text ?? "", h == null || h.Text == "已看完" ? _small : GUI.skin.label);
+                GUILayout.EndHorizontal();
+                Event e = Event.current;
+                if (_allowForce.Value && faces[k] > 0 && e.type == EventType.MouseDown && e.clickCount == 2
+                    && GUILayoutUtility.GetLastRect().Contains(e.mousePosition))
+                {
+                    Dice.Toggle(k);
+                    e.Use();
+                }
+                foreach (string l in h?.Locked ?? new List<string>())
                     GUILayout.Label("      " + Locked + l, _small);
             }
             GUILayout.Space(10);
@@ -372,6 +439,8 @@ namespace KnownUnknown
             }
             if (_menu != null && _menu.IsActive() && _menuHints.Count > 0)
                 DrawMenu();
+            if (_hints != null && Dice.Active)
+                DrawDice();
             GUILayout.Label("本旬 — " + _summary);
             if (_hints != null && !_hints.HasResults)
                 GUILayout.Label("地點事件表跟著劇情場景載入，進過一次地點後才算得出各地點機率。");

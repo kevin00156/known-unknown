@@ -12,11 +12,12 @@ namespace KnownUnknown
         public static bool Enabled = true;
         public static Action<string> Log = _ => { };
 
-        private static readonly Dictionary<PositionResultData, Outcome> Targets = new Dictionary<PositionResultData, Outcome>();
+        // 用事件表名當鍵：每進一次劇情場景，事件表會重新載入成新的物件
+        private static readonly Dictionary<string, Outcome> Targets = new Dictionary<string, Outcome>();
 
         public static IEnumerable<Outcome> All => Targets.Values;
 
-        public static bool Is(Outcome o) => o.Table != null && Targets.TryGetValue(o.Table, out Outcome t) && t.Type == o.Type;
+        public static bool Is(Outcome o) => o.Table != null && Targets.TryGetValue(o.Table.name, out Outcome t) && t.Type == o.Type;
 
         // 同一張表只能指定一個結果；再指定一次同一個 = 取消
         public static void Toggle(Outcome o)
@@ -24,9 +25,9 @@ namespace KnownUnknown
             if (o.Table == null)
                 return;
             if (Is(o))
-                Targets.Remove(o.Table);
+                Targets.Remove(o.Table.name);
             else
-                Targets[o.Table] = o;
+                Targets[o.Table.name] = o;
         }
 
         public static void Patch(Harmony harmony) =>
@@ -36,9 +37,9 @@ namespace KnownUnknown
         // GetResult() 回傳「前綴_結果代碼」= 要跑的劇本名
         private static void AfterGetResult(PositionResultData __instance, ref string __result)
         {
-            if (!Enabled || !Targets.TryGetValue(__instance, out Outcome o))
+            if (!Enabled || !Targets.TryGetValue(__instance.name, out Outcome o))
                 return;
-            Targets.Remove(__instance);
+            Targets.Remove(__instance.name);
             string forced = Traverse.Create(__instance).Field("_scriptPrefix").GetValue<string>() + "_" + o.Type;
             Log($"[指定] {__instance.name}:{__result} → {forced}");
             __result = forced;
