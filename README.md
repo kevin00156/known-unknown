@@ -53,7 +53,8 @@ uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
 - **擲骰**:轉盤出來時，視窗列出每個結果在目前骰面範圍內的機率和會看到的白字(「擲不到」= 這次範圍內骰不出來)。
   雙擊 = 指定擲出它：從骰得到那個結果的面裡挑一面當亂數，轉盤數字、加成、結果都照遊戲自己算
 
-要先進過一次地點，各地點的機率才算得出來(地點事件表跟著劇情場景才載入)。算出的結果也會寫進 `BepInEx/LogOutput.log`(`[選單]`、`[本旬]`、`[指定]`)，方便對照。
+地點事件表本來跟著劇情場景才載入；插件內建一份抽出來的資料(`plugin/PositionTables.txt`)，讀檔後在地圖上就重建好，
+條件接的是遊戲裡的活屬性/旗標，機率是當下真值。第一次進劇情時會拿真表逐一比對，結果寫進日誌(`[預載]`)。算出的結果也會寫進 `BepInEx/LogOutput.log`(`[選單]`、`[本旬]`、`[指定]`)，方便對照。
 
 - 這一旬已經生效的任務(`MissionManagerData.ActiveSubMissions` + 主線)：要去哪個地點，或本旬會自動觸發
 - 各地點的隨機事件：照遊戲的抽法(依序取機率 > 0、同結果代碼只算第一筆)算當下機率，只列還有白字的
@@ -74,6 +75,9 @@ DiceMaster 在 `PositionEventData.GetRate()` 上掛了 patch(呼叫會吃掉玩�
 
 `plugin/SystemFlags.cs` 是 Lua 以外(戰鬥、商店、設施…)會寫入的旗標清單，遊戲更新後用
 `uv run python known_unknown.py --system-flags plugin/SystemFlags.cs` 重新產生。
+`plugin/PositionTables.txt`(預載的地點事件表)同樣在遊戲更新後用
+`uv run python known_unknown.py --position-tables plugin/PositionTables.txt` 重新產生；沒重跑的話插件發現資產檔大小不同，
+就退回「進過一次地點才有機率」，不會用舊資料。
 
 已讀判斷直接問 `ReadStorySystem.ExistKey`,不讀不寫存檔。
 

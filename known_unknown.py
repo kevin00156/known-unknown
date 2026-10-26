@@ -69,18 +69,22 @@ class Assets:
                  if f.endswith(".assets") or re.fullmatch(r"level\d+|globalgamemanagers", f)]
         self.env = UnityPy.load(*files)
         self.cls = {}                              # (檔名, path_id) -> 類別
+        self.script = {}                           # (檔名, path_id) -> (組件, 完整類別名)
         self.objs = {}                             # (檔名, path_id) -> 物件
         self.by_cls = collections.defaultdict(list)
         for obj in self.env.objects:
             if obj.type.name == "MonoBehaviour":
                 k = (obj.assets_file.name, obj.path_id)
-                self.cls[k] = obj.read(check_read=False).m_Script.read().m_ClassName
+                sc = obj.read(check_read=False).m_Script.read()
+                self.cls[k] = sc.m_ClassName
+                self.script[k] = (sc.m_AssemblyName, f"{sc.m_Namespace}.{sc.m_ClassName}".lstrip("."))
                 self.objs[k] = obj
                 self.by_cls[self.cls[k]].append(obj)
         # 型別樹要在讀完類別之後才掛，掛了之後 m_Script 會解不開
         gen = TypeTreeGenerator("2020.3.49f1")
         gen.load_local_game(os.path.dirname(game))
         self.env.typetree_generator = gen
+        self.gen = gen
         self._tt = {}
 
     def tt(self, obj):
@@ -431,6 +435,80 @@ def write_system_flags(game, path):
     print(f"{len(system)} 個旗標 → {path}")
 
 
+# 地點事件表在劇情場景(Story)的資產裡，地圖上沒載入。抽出事件表和它引用的同檔物件，插件在地圖上照原樣重建；
+# 引用到常駐資產(globalgamemanagers.assets:屬性、旗標、書…)的，用 類別+名字 接回遊戲裡的活物件。
+POSITION_FILE = "sharedassets2.assets"
+RESIDENT_FILE = "globalgamemanagers.assets"
+SKIP_FIELDS = {"m_GameObject", "m_Enabled", "m_Script", "m_Name", "m_EditorHideFlags", "m_EditorClassIdentifier"}
+
+
+def write_position_tables(game, path):
+    a = Assets(game)
+    resident = collections.Counter((a.cls[k], o.peek_name()) for k, o in a.objs.items() if k[0] == RESIDENT_FILE)
+    ids, objects, externals, ext_ids = {}, [], [], {}
+    queue = [o for o in a.by_cls["PositionResultData"] if o.assets_file.name == POSITION_FILE]
+
+    def ref(src, ptr):
+        if not ptr["m_PathID"]:
+            return None
+        k = a.key(src, ptr)
+        if k[0] == RESIDENT_FILE:
+            cn = (a.cls[k], a.objs[k].peek_name())
+            if resident[cn] != 1:
+                sys.exit(f"常駐物件 {cn} 名字不唯一，無法對應")
+            if cn not in ext_ids:
+                ext_ids[cn] = len(externals)
+                externals.append({"type": cn[0], "name": cn[1]})
+            return f"e{ext_ids[cn]}"
+        if k[0] != POSITION_FILE or k not in a.objs:
+            sys.exit(f"引用到不支援的檔案/物件 {k}")
+        if k not in ids:
+            ids[k] = len(ids)
+            queue.append(a.objs[k])
+        return f"i{ids[k]}"
+
+    # JsonUtility 執行期不解 instanceID:引用另外記成「欄位路徑=目標」，插件用反射設
+    def plain(node, val, src, path, refs):
+        # 型別樹產生器把 bool 寫成 UInt8;這些類別沒有 byte 欄位(看過反編譯)。JsonUtility 的 bool 要 true/false
+        if node.m_Type in ("bool", "UInt8"):
+            return bool(val)
+        if node.m_Type.startswith("PPtr<"):
+            target = ref(src, val)
+            if target:
+                refs.append(f"{path}={target}")
+            return {"instanceID": 0}
+        if isinstance(val, list):
+            data = node.m_Children[0].m_Children[1]
+            return [plain(data, v, src, f"{path}[{i}]", refs) for i, v in enumerate(val)]
+        if isinstance(val, dict):
+            return {c.m_Name: plain(c, val[c.m_Name], src, f"{path}.{c.m_Name}".lstrip("."), refs)
+                    for c in node.m_Children if c.m_Name in val and c.m_Name not in SKIP_FIELDS}
+        return val
+
+    for o in queue:
+        ids.setdefault((o.assets_file.name, o.path_id), len(ids))
+    i = 0
+    while i < len(queue):
+        o = queue[i]
+        k = (o.assets_file.name, o.path_id)
+        asm, full = a.script[k]
+        node = a.gen.get_nodes_up(asm, full)
+        t = a.tt(o)
+        refs = []
+        body = json.dumps(plain(node, t, o, "", refs), ensure_ascii=False, separators=(",", ":"))
+        objects.append({"id": ids[k], "type": full, "name": t["m_Name"], "json": body, "refs": "|".join(refs)})
+        i += 1
+    objects.sort(key=lambda x: x["id"])
+    # 外層不用 JSON:插件的 JsonUtility 只認遊戲組件裡的型別。一行一筆、tab 分隔(json.dumps 會跳脫 tab/換行)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"{os.path.getsize(f'{game}/{POSITION_FILE}')}\n")
+        for e in externals:
+            f.write(f"E\t{e['type']}\t{e['name']}\n")
+        for o in objects:
+            f.write(f"O\t{o['type']}\t{o['name']}\t{o['json']}\t{o['refs']}\n")
+    print(f"{len(objects)} 個物件、{len(externals)} 個常駐引用 → {path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--game", default=GAME)
@@ -443,7 +521,12 @@ def main():
     ap.add_argument("--spoil", action="store_true", help="顯示每段白字的開頭第一句(輕微劇透)")
     ap.add_argument("--dump-scripts", metavar="DIR", help="把劇本(story/chinesetraditional)匯出成 DIR/<名>.lua 後結束")
     ap.add_argument("--system-flags", metavar="CS", help="產生插件用的「只由遊戲系統寫入的旗標」清單(C#)後結束")
+    ap.add_argument("--position-tables", metavar="JSON", help="產生插件用的地點事件表資料(地圖上預載，plugin/PositionTables.txt)後結束")
     a = ap.parse_args()
+
+    if a.position_tables:
+        write_position_tables(a.game, a.position_tables)
+        return
 
     if a.system_flags:
         write_system_flags(a.game, a.system_flags)

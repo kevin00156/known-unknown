@@ -130,12 +130,29 @@ namespace KnownUnknown
         }
 
         // 地點事件表、Switch/Condition 表在劇情場景裡，只有跑劇情時才在記憶體。抓到就留著引用，回到地圖還能用。
+        // 還沒進過劇情時用預載的複本(Preload)
         public bool HasResults => _results.Count > 0;
 
         public void Capture()
         {
-            foreach (PositionResultData p in Resources.FindObjectsOfTypeAll<PositionResultData>())
-                _results[p.name.ToLowerInvariant()] = p;
+            int compared = 0, bad = 0;
+            foreach (PositionResultData p in Resources.FindObjectsOfTypeAll<PositionResultData>().Where(p => !Preload.IsCopy(p)))
+            {
+                string key = p.name.ToLowerInvariant();
+                if (_results.TryGetValue(key, out PositionResultData old) && Preload.IsCopy(old))
+                {
+                    compared++;
+                    bad += Preload.Mismatches(old, p, Rate);
+                }
+                _results[key] = p;
+            }
+            if (compared > 0)
+                Preload.Log($"[預載] 真表載入，比對 {compared} 張：{(bad == 0 ? "機率全部一致" : bad + " 個事件不一致")}");
+            if (_results.Count == 0)
+            {
+                foreach (PositionResultData p in Preload.Tables())
+                    _results[p.name.ToLowerInvariant()] = p;
+            }
             _cond.Capture();
         }
 

@@ -16,7 +16,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.9.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.10.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -80,7 +80,7 @@ namespace KnownUnknown
                 "在清單裡雙擊地點事件的結果 = 指定下次去那裡一定抽到它(再雙擊取消);在地圖上雙擊會直接替你點地點、選行動。會改變遊戲結果，不想要就關掉");
             Force.Enabled = Dice.Enabled = _allowForce.Value;
             _allowForce.SettingChanged += (_, __) => Force.Enabled = Dice.Enabled = _allowForce.Value;
-            Force.Log = Dice.Log = m => Logger.LogInfo(m);
+            Force.Log = Dice.Log = Preload.Log = m => Logger.LogInfo(m);
             Tally.Unit = _countUnit.Value;
             _countUnit.SettingChanged += (_, __) =>
             {
@@ -441,7 +441,7 @@ namespace KnownUnknown
                 DrawDice();
             GUILayout.Label("本旬 — " + _summary);
             if (_hints != null && !_hints.HasResults)
-                GUILayout.Label("地點事件表跟著劇情場景載入，進過一次地點後才算得出各地點機率。");
+                GUILayout.Label("內建的地點事件表和遊戲版本對不上(見日誌 [預載]),進過一次地點後才算得出各地點機率。");
             else if (_list.Count == 0 && _hints != null)
                 GUILayout.Label("這一旬沒有找到會出現白字的任務或地點事件。");
             foreach (Hint h in _list)

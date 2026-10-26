@@ -4,7 +4,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>KnownUnknown</AssemblyName>
     <RootNamespace>KnownUnknown</RootNamespace>
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
     <DebugType>none</DebugType>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
@@ -28,5 +28,10 @@
     <Reference Include="$(Managed)/LeanLocalization.dll" Private="false" />
     <Reference Include="$(Managed)/Fungus.dll" Private="false" />
     <Reference Include="$(Managed)/UnityEngine.UI.dll" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 由 known_unknown.py 的 position-tables 選項產生；遊戲更新後重跑 -->
+    <EmbeddedResource Include="PositionTables.txt" LogicalName="KnownUnknown.PositionTables.txt" />
   </ItemGroup>
 </Project>
