@@ -11,10 +11,11 @@ using HarmonyLib;
 using Mortal.Core;
 using Mortal.Free;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.3.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.4.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -60,6 +61,7 @@ namespace KnownUnknown
             _harmony.Patch(addOption, postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterAddOption)));
             MenuSignals.OnMenuStart += OnMenuStart;
             MenuSignals.OnMenuEnd += OnMenuEnd;
+            SceneManager.sceneLoaded += OnSceneLoaded;
             Logger.LogInfo("多玩10塊錢 loaded");
         }
 
@@ -67,6 +69,7 @@ namespace KnownUnknown
         {
             MenuSignals.OnMenuStart -= OnMenuStart;
             MenuSignals.OnMenuEnd -= OnMenuEnd;
+            SceneManager.sceneLoaded -= OnSceneLoaded;
             _harmony?.UnpatchSelf();
         }
 
@@ -76,7 +79,7 @@ namespace KnownUnknown
             if (_building == null && Game.Ready())
                 StartBuild();
             if (_hints == null && _index != null)
-                _hints = new Hints(_index, _places);
+                _hints = new Hints(_index);
 
             if (Input.GetKeyDown(_toggleKey.Value))
             {
@@ -90,14 +93,11 @@ namespace KnownUnknown
             }
         }
 
-        private List<FreePositionData> _places;
-
         private void StartBuild()
         {
-            // Unity API 只能在主執行緒：劇本文字、任務與地點資料先在這裡抓好
+            // Unity API 只能在主執行緒：劇本文字、任務資料先在這裡抓好
             KeyValuePair<string, string>[] scripts = StoryIndex.Load();
-            _places = Resources.FindObjectsOfTypeAll<FreePositionData>().ToList();
-            HashSet<string> stop = Hints.StopSet(_places);
+            HashSet<string> stop = Hints.StopSet();
             _building = new Thread(() =>
             {
                 try
@@ -127,7 +127,7 @@ namespace KnownUnknown
             MissionManagerData mm = MissionManagerData.Instance;
             GameTime t = PlayerStatManagerData.Instance.GameTime;
             string sig = $"{t.Year}/{t.Month}/{(int)t.Stage}/{Game.ReadCount()}/"
-                + $"{mm.ActiveSubMissions?.Count}/{mm.MainMissionStart}";
+                + $"{mm.ActiveSubMissions?.Count}/{mm.MainMissionStart}/{OnMap()}";
             if (sig == _signature)
                 return;
             _signature = sig;
@@ -136,9 +136,16 @@ namespace KnownUnknown
             int total = _index.TotalKeys;
             _summary = $"全部台詞已讀 {total - unread}/{total}({100f * (total - unread) / total:F1}%),白字 {unread} 句";
             // 寫進 BepInEx 日誌，方便對照驗證
-            Logger.LogInfo($"[本旬] {t.Year}年{t.Month}月{t.Stage} " + _summary);
+            Logger.LogInfo($"[本旬] {t.Year}年{t.Month}月{t.Stage} " + _summary + (_hints.HasResults ? "" : "(尚無地點事件表)"));
             foreach (Hint h in _list)
                 Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {h.Unread}句 | {h.Detail}");
+        }
+
+        // 進劇情時地點事件表才載入，趁這時抓
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            _hints?.Capture();
+            _signature = null;
         }
 
         private void OnMenuStart(MenuDialog menu)
@@ -165,8 +172,8 @@ namespace KnownUnknown
             try
             {
                 string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
-                string info = p._hints.ForOption(script, text);
-                p.Logger.LogInfo($"[選單] {script} | {text} → {info ?? "(不認得)"}");
+                string info = p._hints.ForOption(script, text, out string detail);
+                p.Logger.LogInfo($"[選單] {script} | {text} → {info ?? "(不認得)"} {detail}");
                 if (info != null)
                     p._menuLines.Add(new KeyValuePair<string, string>(Text.OptionLabel(text), info));
             }
@@ -176,10 +183,11 @@ namespace KnownUnknown
             }
         }
 
-        // 自由行動地圖(選地點的畫面)
+        // 自由行動地圖(選地點的畫面)。跑劇情時 Free 場景還在，要看 FreeManager 是否正在處理
         private static bool OnMap()
         {
-            return UnityEngine.SceneManagement.SceneManager.GetSceneByName("Free").isLoaded;
+            FreeManager f = FreeManager.Instance;
+            return f != null && f.isActiveAndEnabled && !f.IsProcessing;
         }
 
         private void OnGUI()
@@ -231,7 +239,9 @@ namespace KnownUnknown
         {
             List<KeyValuePair<string, string>> lines = _list.Where(h => h.Rank >= 0).Take(6)
                 .Select(h => new KeyValuePair<string, string>(h.Where, $"{h.Chance}({h.Unread} 句)")).ToList();
-            if (lines.Count == 0)
+            if (!_hints.HasResults)
+                lines.Add(new KeyValuePair<string, string>("地點機率要等進過一次地點才算得出來", ""));
+            else if (lines.Count == 0)
                 lines.Add(new KeyValuePair<string, string>("本旬各地點都看完了", ""));
             DrawBox($"多玩10塊錢 — 本旬白字(完整清單按 {_toggleKey.Value})", lines);
         }
@@ -240,7 +250,9 @@ namespace KnownUnknown
         {
             GUILayout.Label(_summary);
             _scroll = GUILayout.BeginScrollView(_scroll);
-            if (_list.Count == 0 && _hints != null)
+            if (_hints != null && !_hints.HasResults)
+                GUILayout.Label("地點事件表跟著劇情場景載入，進過一次地點後才算得出各地點機率。");
+            else if (_list.Count == 0 && _hints != null)
                 GUILayout.Label("這一旬沒有找到會出現白字的任務或地點事件。");
             foreach (Hint h in _list)
             {

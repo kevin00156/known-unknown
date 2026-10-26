@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -20,6 +21,7 @@ namespace KnownUnknown
         public GuardKind Kind;
         public string Name;   // Switch 名或 choice 變數名
         public int Value;
+        public string Gate;   // Choice:這個選項要 checkpointmanager.Condition(Gate) 成立才會出現在選單上
     }
 
     internal enum ItemKind
@@ -63,9 +65,8 @@ namespace KnownUnknown
         };
 
         private readonly Dictionary<string, Script> _scripts = new Dictionary<string, Script>();
-        // 劇本 -> 沿劇本跳轉接下去的劇本(含自己；遇到有自己入口的劇本就停)
-        private readonly Dictionary<string, string[]> _closure = new Dictionary<string, string[]>();
-        private readonly Dictionary<string, string[]> _closureKeys = new Dictionary<string, string[]>();
+        // 有自己入口的劇本(任務起點):沿劇本跳轉走到這裡就停
+        private readonly HashSet<string> _stop;
         // 地點事件表名 -> 從選單哪個選項進去(選項字串)
         private readonly Dictionary<string, string> _actions = new Dictionary<string, string>();
 
@@ -82,6 +83,7 @@ namespace KnownUnknown
         // 純字串處理，在背景執行緒跑。stop = 有自己入口(任務、地點)的劇本。
         public StoryIndex(KeyValuePair<string, string>[] scripts, HashSet<string> stop)
         {
+            _stop = stop;
             foreach (KeyValuePair<string, string> s in scripts)
             {
                 Script p = Parse(s.Value);
@@ -91,12 +93,8 @@ namespace KnownUnknown
                 _scripts[s.Key] = p;
                 TotalKeys += p.Items.Count(i => i.Kind == ItemKind.Key);
             }
-            foreach (KeyValuePair<string, Script> s in _scripts)
-            {
-                _closure[s.Key] = Closure(s.Key, stop).ToArray();
-                _closureKeys[s.Key] = _closure[s.Key].SelectMany(n => Of(n, ItemKind.Key)).Distinct().ToArray();
-                IndexActions(s.Value);
-            }
+            foreach (Script p in _scripts.Values)
+                IndexActions(p);
         }
 
         public bool Has(string script) => _scripts.ContainsKey(script);
@@ -107,11 +105,29 @@ namespace KnownUnknown
         public IEnumerable<string> AllKeys => _scripts.Values.SelectMany(s => s.Items)
             .Where(i => i.Kind == ItemKind.Key).Select(i => i.Value);
 
-        public string[] ClosureKeys(string script) =>
-            _closureKeys.TryGetValue(script, out string[] k) ? k : new string[0];
+        // 從 start 沿劇本跳轉走得到的台詞、跳轉、地點事件表。只走 ok(分支條件) 成立的分支，
+        // 條件由呼叫端依當下遊戲狀態判斷。stop 裡的劇本有自己的入口，不走進去(start 本身除外)。
+        public IEnumerable<Item> Walk(string start, Func<Guard[], bool> ok)
+        {
+            HashSet<string> seen = new HashSet<string> { start };
+            Queue<string> queue = new Queue<string>();
+            queue.Enqueue(start);
+            while (queue.Count > 0)
+            {
+                Script s = Get(queue.Dequeue());
+                if (s == null)
+                    continue;
+                foreach (Item i in s.Items.Where(i => ok(i.Guards)))
+                {
+                    if (i.Kind == ItemKind.Script && Has(i.Value) && !_stop.Contains(i.Value) && seen.Add(i.Value))
+                        queue.Enqueue(i.Value);
+                    yield return i;
+                }
+            }
+        }
 
-        public string[] ClosureScripts(string script) =>
-            _closure.TryGetValue(script, out string[] k) ? k : new string[0];
+        public IEnumerable<string> Keys(string start, Func<Guard[], bool> ok) =>
+            Walk(start, ok).Where(i => i.Kind == ItemKind.Key).Select(i => i.Value).Distinct();
 
         public string ActionOf(string positionResult) =>
             _actions.TryGetValue(positionResult, out string a) ? a : null;
@@ -123,25 +139,6 @@ namespace KnownUnknown
             if (s == null || s.Cast.Length == 0)
                 return "";
             return string.Join("、", s.Cast.Select(id => Text.Get("Character/" + id, id)).Distinct().Take(max));
-        }
-
-        private IEnumerable<string> Of(string script, ItemKind kind) =>
-            _scripts[script].Items.Where(i => i.Kind == kind).Select(i => i.Value);
-
-        // 從 start 沿劇本跳轉走到的劇本(含自己)。stop 裡的劇本有自己的入口，不算進來(start 本身除外)。
-        private HashSet<string> Closure(string start, HashSet<string> stop)
-        {
-            HashSet<string> seen = new HashSet<string> { start };
-            Queue<string> queue = new Queue<string>(seen);
-            while (queue.Count > 0)
-            {
-                foreach (string s in Of(queue.Dequeue(), ItemKind.Script))
-                {
-                    if (Has(s) && !stop.Contains(s) && seen.Add(s))
-                        queue.Enqueue(s);
-                }
-            }
-            return seen;
         }
 
         // 地點事件表若在選單分支裡，記下是哪個選項(F8 清單要寫「去正心堂 →「靜坐冥想」」)
@@ -171,6 +168,8 @@ namespace KnownUnknown
             Dictionary<string, Guard> vars = new Dictionary<string, Guard>();
             Dictionary<string, Dictionary<int, string>> arrays = new Dictionary<string, Dictionary<int, string>>();
             Dictionary<string, string> chooses = new Dictionary<string, string>();   // choice 變數 -> 陣列
+            Dictionary<string, string> conds = new Dictionary<string, string>();     // 變數 -> Condition 名
+            Dictionary<string, string> gates = new Dictionary<string, string>();     // "陣列[第幾個]" -> Condition 名
             List<KeyValuePair<int, Guard?>> stack = new List<KeyValuePair<int, Guard?>>();
             Guard[] guards = new Guard[0];
 
@@ -196,7 +195,11 @@ namespace KnownUnknown
                     int eq = cond.IndexOf(" == ");
                     if (eq > 0 && int.TryParse(cond.Substring(eq + 4), out int n)
                         && vars.TryGetValue(cond.Substring(0, eq), out Guard v))
-                        pushed = new Guard { Kind = v.Kind, Name = v.Name, Value = n };
+                    {
+                        gates.TryGetValue(v.Kind == GuardKind.Choice && chooses.TryGetValue(v.Name, out string a)
+                            ? $"{a}[{n}]" : "", out string gate);
+                        pushed = new Guard { Kind = v.Kind, Name = v.Name, Value = n, Gate = gate };
+                    }
                 }
                 else if (l == "else")
                 {
@@ -220,6 +223,8 @@ namespace KnownUnknown
                         vars[name] = new Guard { Kind = GuardKind.Choice, Name = name };
                         chooses[name] = rhs.Substring(7, rhs.IndexOf(')') - 7);
                     }
+                    else if (rhs.StartsWith("checkpointmanager.Condition(\""))
+                        conds[name] = Arg(rhs, 0);
                     else
                         vars[name] = new Guard { Kind = GuardKind.Random, Name = name };
                 }
@@ -236,6 +241,10 @@ namespace KnownUnknown
                         if (!arrays.ContainsKey(arr))
                             arrays[arr] = new Dictionary<int, string>();
                         arrays[arr][idx] = l.Substring(q + 1, e - q - 1);
+                        // arr[3] = Cond and "O_xxx" or "~x"
+                        string head = l.Substring(b + 4, q - b - 4).Trim();
+                        if (head.EndsWith(" and") && conds.TryGetValue(head.Substring(0, head.Length - 4), out string cond))
+                            gates[$"{arr}[{idx}]"] = cond;
                     }
                 }
 

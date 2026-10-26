@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
 ku-db.json
-plugin/bin/
-plugin/obj/
+bin/
+obj/
+out/

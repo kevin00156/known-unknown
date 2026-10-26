@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 開發用：從檔案收指令、直接在遊戲內按 UI,不用搶滑鼠鍵盤焦點。不要隨 mod 發佈。 -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>KnownUnknownDev</AssemblyName>
+    <DebugType>none</DebugType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
+    <GamePath Condition="'$(GamePath)' == ''">$(HOME)/.steam/debian-installation/steamapps/common/LegendOfMortal</GamePath>
+    <Managed>$(GamePath)/Mortal_Data/Managed</Managed>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.697" IncludeAssets="compile" />
+    <PackageReference Include="UnityEngine.Modules" Version="2020.3.49" IncludeAssets="compile" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="$(Managed)/UnityEngine.UI.dll" Private="false" />
+  </ItemGroup>
+</Project>
