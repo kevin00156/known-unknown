@@ -5,7 +5,8 @@
 ```
 uv run python known_unknown.py               # 自動找最新的 Save_universe.json
 uv run python known_unknown.py --top 0       # 全列
-uv run python known_unknown.py --unreachable # 順便列出判定不可達的劇本
+uv run python known_unknown.py --only 第8章   # 只看某分類(第N章/支線/談話/養成…)
+uv run python known_unknown.py --unreachable # 順便列出判定不可達的劇本與原因
 uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
 ```
 
@@ -22,8 +23,14 @@ uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
   - `PositionResultData` 的劇本名是執行時拼的：`_scriptPrefix + "_" + StoryMappingItem.Value`,
     用 TypeTreeGenerator 從 Managed DLL 產生型別樹解開。
   - 排除：`Test*` 除錯按鈕、標題畫面隱藏的「啟程(活動)」展場模式(`act*`)。
-- **校準**:判成不可達卻已讀的句數應該是 0。不是 0 就代表漏了某種引用方式。
+- **條件**:`MissionCheckData`(`_active` + 條件 AND + 時間)、`PositionEventData._activeCondition`
+  依遊戲語意求值。只有「整個遊戲沒有任何地方會寫入」的旗標用預設值代入，其他一律當成可能成立。
+  寫入者 = Lua `statmodifymanager.SetFlag/AddFlag` 字面值、C# 寫死的名字、
+  以及 `FLAG_READERS` 以外任何用 PPtr 直接指到 `FlagData` 的物件(寧可多算)。
+- **校準**:判成不可達卻已讀的劇本會用 ⚠ 標出來。目前唯一一份是 `ch7_5_4_4_3`
+  (要 `G11007` 攻略小菊=1,現版沒有任何地方會設這個旗標)，推測是舊版或 DiceMaster 強制觸發看到的。
 
 ## 已知限制
 
-可達性只看「有沒有路」,不看條件成不成立(旗標、好感、周目)。條件分析與觸發位置說明是下一步。
+- Lua 劇本內部的分支(`checkpointmanager.Switch/Condition`)沒有求值，同一劇本裡拿不到的分支仍算白字。
+- 入口條件只顯示，不跟目前存檔的旗標比對；「現在去哪裡能看到」要等遊戲內插件(KU-3)用 runtime 判斷。
