@@ -414,7 +414,8 @@ namespace KnownUnknown
                     string action = _index.ActionOf(i.Value);
                     yield return new Place
                     {
-                        Where = where + (action == null ? "" : $" →「{Text.OptionLabel(action)}」"),
+                        // 沒有選單選項 = 一進地點就抽(大門：抽到「特殊」直接演，其他結果才出現鬧市/外堡/行商選單)
+                        Where = where + (action == null ? "(進去就抽，不用選)" : $" →「{Text.OptionLabel(action)}」"),
                         Data = place,
                         Action = action,
                         Table = pr,
