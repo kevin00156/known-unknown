@@ -24,7 +24,8 @@ SCRIPT_DIR = "story/chinesetraditional/"   # LuaManager 只載這個；chinesesi
 NEW_GAME_SCRIPT = "ch1_1"                  # SaveSystem.NewGameData()
 
 # 遊戲 enum(反編譯 Mortal.Core)
-POSITION = ["", "正心堂", "校場", "煉丹房", "鍛冶場", "後山", "弟子房", "大門", "講經堂", "伙房", "女弟子房", "神秘房子"]
+# PositionType 的 [StringValue];畫面上的名字在在地化表 Position/Name/<值>(enum 名「校場」畫面上是「練功場」)
+POSITION_KEYS = ["", "Mall", "Center", "Alchemy", "Forge", "BackMountain", "Room1", "Door", "Study", "Kitchen", "Room2", "Secret"]
 STAGE = {1: "上旬", 2: "中旬", 3: "下旬"}
 COMPARE = ["=", "!=", "<", "<=", ">", ">="]
 CHECK_CONST, CHECK_FLAG = 0, 3            # StatCheckType.常數 / 旗標
@@ -38,6 +39,8 @@ FLAG_READERS = {"StatGroupVariable", "FlagData",
                 "DiceResultData", "FlagDataRateConvertData"}
 
 KEY_RE = re.compile(r'GetStoryText\("([^"]+)"\)')
+CAST_RE = re.compile(r'characters\.Get\("([^"]+)"\)')
+NOT_CAST = re.compile(r"player|unknown|pigeon")   # 主角自己、？？？、信鴿不算登場人物
 STR_RE = re.compile(r'"([A-Za-z0-9_]+)"')
 FLAG_WRITE_RE = re.compile(r'statmodifymanager\.(?:SetFlag|AddFlag)\("([^"]+)"')
 
@@ -90,6 +93,15 @@ class Assets:
 
     def deref(self, src, ptr):
         return self.objs.get(self.key(src, ptr)) if ptr["m_PathID"] else None
+
+    def texts(self, lang="ChineseTraditional"):
+        """LeanLanguageCSV 的在地化表：Story/<台詞key>、Character/<角色>、Position/Name/<地點> ..."""
+        out = {}
+        for obj in self.by_cls["LeanLanguageCSV"]:
+            t = self.tt(obj)
+            if t["Language"] == lang:
+                out.update((e["Name"], e["Text"]) for e in t["entries"])
+        return out
 
 
 def written_flags(assets, scripts):
@@ -177,7 +189,7 @@ def game_time(t):
     return s + ("晚上" if t.get("DayEnvironment") == 2 else "")
 
 
-def mission_entries(a, cond):
+def mission_entries(a, cond, pos):
     for obj in a.by_cls["MissionCheckData"]:
         t = a.tt(obj)
         script = t["_startScript"].lower()
@@ -194,12 +206,12 @@ def mission_entries(a, cond):
             when = {1: game_time(t["_specificTime"]),
                     2: f'{game_time(t["_minTime"])}~{game_time(t["_maxTime"])}',
                     3: f'每月{STAGE.get(t["_periodStage"], "")}'}.get(t["_timeCheckType"], "")
-        yield script, {"kind": "任務", "id": t["_key"], "where": POSITION[t["_position"]],
+        yield script, {"kind": "任務", "id": t["_key"], "where": pos[t["_position"]],
                        "when": when, "cond": " 且 ".join(texts), "possible": possible,
                        **({} if t["_active"] else {"why": "任務停用(_active=0)"})}
 
 
-def position_entries(a):
+def position_entries(a, pos):
     for obj in a.by_cls["FreePositionData"]:
         t = a.tt(obj)
         if t["_defaultScript"]:
@@ -209,7 +221,7 @@ def position_entries(a):
         t = a.tt(obj)
         if t["_scriptName"]:
             yield t["_scriptName"].lower(), {"kind": "地點", "id": t["_scriptName"],
-                                             "where": POSITION[t["_position"]], "possible": True}
+                                             "where": pos[t["_position"]], "possible": True}
 
 
 def position_results(a, cond):
@@ -238,10 +250,12 @@ def build(game):
     names = set(scripts)   # Resources 路徑全小寫,Resources.Load 不分大小寫，比對一律小寫
     a = Assets(game)
     cond = Conditions(a, written_flags(a, scripts))
+    tw = a.texts()
+    pos = [tw.get(f"Position/Name/{k}", k) for k in POSITION_KEYS]
 
     entries = collections.defaultdict(list)   # 劇本 -> 入口(遊戲資料直接觸發)
     entries[NEW_GAME_SCRIPT].append({"kind": "開局", "id": "新遊戲", "possible": True})
-    for script, e in [*mission_entries(a, cond), *position_entries(a)]:
+    for script, e in [*mission_entries(a, cond, pos), *position_entries(a, pos)]:
         if script in names:
             entries[script].append(e)
 
@@ -257,7 +271,16 @@ def build(game):
                     out.setdefault(target, e)
         edges[n] = sorted(out.items())
     keys = {n: list(dict.fromkeys(KEY_RE.findall(t))) for n, t in scripts.items()}
-    return {"keys": keys, "edges": edges, "entries": entries}
+    info = {n: scene_info(t, keys[n], tw) for n, t in scripts.items() if keys[n]}
+    return {"keys": keys, "edges": edges, "entries": entries, "info": info}
+
+
+def scene_info(text, keys, tw):
+    """玩家認得出來的描述：登場人物(出場次數多的在前)與開頭第一句。"""
+    cast = collections.Counter(c for c in CAST_RE.findall(text) if not NOT_CAST.search(c))
+    names = list(dict.fromkeys(tw.get(f"Character/{c}", c) for c, _ in cast.most_common()))
+    first = " ".join(tw.get(f"Story/{keys[0]}", "").split())
+    return {"cast": names[:4], "first": first[:40]}
 
 
 def reach(db):
@@ -323,7 +346,7 @@ def find_save():
     return saves[-1]
 
 
-def report(db, read, top, show_unreachable, only):
+def report(db, read, top, show_unreachable, only, spoil):
     seen = reach(db)
     rows, dead = [], []
     stat = collections.Counter()
@@ -350,7 +373,8 @@ def report(db, read, top, show_unreachable, only):
           f"其中已讀 {stat['dead_total'] - stat['dead_unread']} 句")
     for n, t, r in dead:
         if r:   # 舊版遊戲、改檔/強制觸發事件的 mod 看過，或分析真的漏了——值得人工看一眼
-            print(f"  ⚠ {n} 已讀 {r}/{t} 但判為不可達(舊版或 mod 強制觸發？細節見 --unreachable)")
+            print(f"  ⚠ {'、'.join(db['info'][n]['cast'])} [{n}] 已讀 {r}/{t} 但判為不可達"
+                  "(舊版或 mod 強制觸發？細節見 --unreachable)")
     known = {k for ks in db["keys"].values() for k in ks}
     print(f"存檔裡 {len(read - known)} 句已讀 key 不在現版劇本中(舊版改掉的台詞，忽略)\n")
 
@@ -361,10 +385,14 @@ def report(db, read, top, show_unreachable, only):
     print()
 
     rows.sort(key=lambda r: -r[1])
-    print(f"{'劇本':<28}{'白字':>5}{'總句':>5}  入口")
     for n, u, t in rows[:top]:
         src, hops = origin(seen, n)
-        print(f"{n:<28}{u:>5}{t:>5}  {src}" + (f" →{hops}層" if hops else ""))
+        inf = db["info"][n]
+        cast = "、".join(inf["cast"]) or "(無其他角色)"
+        print(f"■ {cast}  白字 {u}/{t}  [{n}]")
+        if spoil and inf["first"]:
+            print(f"    開頭：「{inf['first']}」")
+        print(f"    觸發：{src}" + (f",之後再過 {hops} 段劇情" if hops else ""))
     if len(rows) > top:
         print(f"... 還有 {len(rows) - top} 份(--top 0 全列)")
 
@@ -373,7 +401,8 @@ def report(db, read, top, show_unreachable, only):
         for n, t, r in sorted(dead, key=lambda d: (-d[2], -d[1])):
             why = "; ".join(f'{describe(e)} → {e.get("why", "條件不可能成立")}'
                             for e in db["entries"].get(n, []))
-            print(f"  {n:<28}{t:>5} 句，已讀 {r}" + (f"  {why}" if why else "  (沒有入口)"))
+            cast = "、".join(db["info"][n]["cast"])
+            print(f"  {cast} [{n}] {t} 句，已讀 {r}" + (f"\n    {why}" if why else "  (沒有入口)"))
 
 
 def main():
@@ -385,6 +414,7 @@ def main():
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument("--only", help="只列某分類，例如「第8章」「支線」「談話」")
     ap.add_argument("--unreachable", action="store_true", help="列出判定為不可達的劇本與原因")
+    ap.add_argument("--spoil", action="store_true", help="顯示每段白字的開頭第一句(輕微劇透)")
     a = ap.parse_args()
 
     if a.rebuild or not os.path.exists(a.cache):
@@ -395,7 +425,7 @@ def main():
         db = json.load(f)
     with open(a.save or find_save(), encoding="utf-8-sig") as f:
         read = set(json.load(f)["ReadStoryData"])
-    report(db, read, a.top if a.top > 0 else 10**9, a.unreachable, a.only)
+    report(db, read, a.top if a.top > 0 else 10**9, a.unreachable, a.only, a.spoil)
 
 
 if __name__ == "__main__":

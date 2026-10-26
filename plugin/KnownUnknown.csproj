@@ -25,5 +25,6 @@
     <Reference Include="$(Managed)/Mortal.Story.dll" Private="false" />
     <Reference Include="$(Managed)/Mortal.Free.dll" Private="false" />
     <Reference Include="$(Managed)/OBB.Framework.dll" Private="false" />
+    <Reference Include="$(Managed)/LeanLocalization.dll" Private="false" />
   </ItemGroup>
 </Project>
