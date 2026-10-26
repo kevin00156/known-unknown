@@ -23,6 +23,7 @@ namespace KnownUnknown
         private ConfigEntry<KeyCode> _toggleKey;
         private ConfigEntry<bool> _menuHints;
         private ConfigEntry<bool> _mapHints;
+        private ConfigEntry<CountUnit> _countUnit;
         private Harmony _harmony;
 
         // 劇本索引：讀檔在主執行緒，解析在背景
@@ -52,6 +53,14 @@ namespace KnownUnknown
             _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F8, "開關「這一旬去哪裡能看到白字」視窗");
             _menuHints = Config.Bind("General", "MenuHints", true, "選單出現時，顯示每個選項會看到多少白字");
             _mapHints = Config.Bind("General", "MapHints", true, "在自由行動地圖上，顯示本旬去哪裡能看到白字");
+            _countUnit = Config.Bind("General", "CountUnit", CountUnit.Both,
+                "白字怎麼算：Events = 幾段劇情(還有白字的事件/結果),Lines = 幾句台詞,Both = 兩個都顯示");
+            Tally.Unit = _countUnit.Value;
+            _countUnit.SettingChanged += (_, __) =>
+            {
+                Tally.Unit = _countUnit.Value;
+                _signature = null;
+            };
 
             // Lua 的 choose() 每個選項呼叫一次這個多載；只加 postfix,不改遊戲行為
             MethodInfo addOption = typeof(MenuDialog).GetMethods().First(m =>
@@ -138,7 +147,7 @@ namespace KnownUnknown
             // 寫進 BepInEx 日誌，方便對照驗證
             Logger.LogInfo($"[本旬] {t.Year}年{t.Month}月{t.Stage} " + _summary + (_hints.HasResults ? "" : "(尚無地點事件表)"));
             foreach (Hint h in _list)
-                Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {h.Unread}句 | {h.Detail}");
+                Logger.LogInfo($"[本旬]   {h.Where} {h.Chance} {h.Count} | {h.Detail}");
         }
 
         // 進劇情時地點事件表才載入，趁這時抓
@@ -238,7 +247,7 @@ namespace KnownUnknown
         private void DrawMapHints()
         {
             List<KeyValuePair<string, string>> lines = _list.Where(h => h.Rank >= 0).Take(6)
-                .Select(h => new KeyValuePair<string, string>(h.Where, $"{h.Chance}({h.Unread} 句)")).ToList();
+                .Select(h => new KeyValuePair<string, string>(h.Where, $"{h.Chance} {h.Count}")).ToList();
             if (!_hints.HasResults)
                 lines.Add(new KeyValuePair<string, string>("地點機率要等進過一次地點才算得出來", ""));
             else if (lines.Count == 0)
@@ -260,7 +269,7 @@ namespace KnownUnknown
                 GUILayout.Label(h.Where);
                 GUILayout.FlexibleSpace();
                 GUILayout.Label(h.Chance, GUILayout.Width(60));
-                GUILayout.Label(h.Unread + " 句", GUILayout.Width(70));
+                GUILayout.Label(h.Count.ToString(), GUILayout.Width(110));
                 GUILayout.EndHorizontal();
                 GUILayout.Label("    " + h.Detail, _small);
             }

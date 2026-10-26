@@ -8,20 +8,51 @@ using UnityEngine;
 
 namespace KnownUnknown
 {
+    internal enum CountUnit
+    {
+        Events,
+        Lines,
+        Both,
+    }
+
+    // 沒看過的內容有多少：事件 = 還有白字的入口(地點結果、任務、跳轉劇本),句 = 白字台詞
+    internal struct Tally
+    {
+        public int Events;
+        public int Lines;
+
+        public static CountUnit Unit = CountUnit.Both;
+
+        public Tally(int events, int lines)
+        {
+            Events = events;
+            Lines = lines;
+        }
+
+        public static Tally operator +(Tally a, Tally b) => new Tally(a.Events + b.Events, a.Lines + b.Lines);
+
+        public bool Any => Lines > 0;
+
+        public override string ToString() =>
+            Unit == CountUnit.Events ? $"{Events} 段"
+            : Unit == CountUnit.Lines ? $"{Lines} 句"
+            : $"{Events} 段・{Lines} 句";
+    }
+
     internal class Hint
     {
         public string Where;   // 去哪裡、選哪個行動
         public string Chance;  // 這一趟看到白字的機率
         public string Detail;  // 沒看過的結果 / 登場人物
         public int Rank;       // 排序用：越大越前面
-        public int Unread;
+        public Tally Count;
     }
 
     // 地點事件表抽一次的結果
     internal struct Roll
     {
         public int Chance;           // 抽到還有白字的結果的機率(%)
-        public int Unread;
+        public Tally Count;          // 每個還有白字的結果算一段
         public List<string> Unseen;  // 「失敗 25%(唐中翎)」
     }
 
@@ -184,7 +215,7 @@ namespace KnownUnknown
                 if (n == 0)
                     continue;
                 hit += x.Value;
-                roll.Unread += n;
+                roll.Count += new Tally(1, n);
                 string cast = _index.Cast(script, 2);
                 roll.Unseen.Add($"{Label(x.Key)} {100 * x.Value / sum}%" + (cast.Length > 0 ? $"({cast})" : ""));
             }
@@ -200,8 +231,10 @@ namespace KnownUnknown
             Script s = _index.Get(script);
             if (s == null || !s.Options.TryGetValue(option.TrimStart('~'), out KeyValuePair<string, int> pick))
                 return null;
-            HashSet<string> keys = new HashSet<string>();
             List<string> parts = new List<string>();
+            // 這個劇本裡直接出現的台詞算一段，每個跳轉出去的劇本各算一段
+            HashSet<string> inline = new HashSet<string>();
+            HashSet<string> jumps = new HashSet<string>();
             foreach (Item i in s.Items)
             {
                 // 只看這個選項的分支，而且分支裡的 Switch 條件現在要成立
@@ -209,22 +242,32 @@ namespace KnownUnknown
                     || !Possible(i.Guards, pick.Key, pick.Value))
                     continue;
                 if (i.Kind == ItemKind.Key)
-                    keys.Add(i.Value);
+                    inline.Add(i.Value);
                 else if (i.Kind == ItemKind.Script)
-                    keys.UnionWith(_index.Keys(i.Value, Now));
+                    jumps.Add(i.Value);
                 else if (_results.TryGetValue(i.Value, out PositionResultData pr))
                 {
                     Roll r = RollOf(pr);
-                    if (r.Unread > 0)
-                        parts.Add($"{r.Chance}% 抽到白字({r.Unread} 句)");
+                    if (r.Count.Any)
+                        parts.Add($"{r.Chance}% 抽到白字 {r.Count}");
                     detail += $"[{i.Value}: {string.Join("、", r.Unseen)}]";
                 }
             }
-            int unread = Game.Unread(keys);
-            detail += string.Join(",", keys.Where(k => !ReadStorySystem.Instance.ExistKey(k)));
-            if (unread > 0)
-                parts.Add($"白字 {unread} 句");
+            Tally t = Count(inline);
+            foreach (string j in jumps)
+                t += Count(_index.Keys(j, Now));
+            detail += string.Join(",", inline.Concat(jumps.SelectMany(j => _index.Keys(j, Now))).Distinct()
+                .Where(k => !ReadStorySystem.Instance.ExistKey(k)));
+            if (t.Any)
+                parts.Add($"白字 {t}");
             return parts.Count == 0 ? "已看完" : string.Join(",", parts);
+        }
+
+        // 一個入口的白字：有就算一段
+        private static Tally Count(IEnumerable<string> keys)
+        {
+            int n = Game.Unread(keys);
+            return new Tally(n > 0 ? 1 : 0, n);
         }
 
         // F8 清單/地圖提示：這一旬去哪裡能看到白字
@@ -234,7 +277,7 @@ namespace KnownUnknown
             List<Hint> hints = new List<Hint>();
             AddMissions(hints);
             AddPlaces(hints);
-            hints.Sort((a, b) => b.Rank != a.Rank ? b.Rank.CompareTo(a.Rank) : b.Unread.CompareTo(a.Unread));
+            hints.Sort((a, b) => b.Rank != a.Rank ? b.Rank.CompareTo(a.Rank) : b.Count.Lines.CompareTo(a.Count.Lines));
             return hints;
         }
 
@@ -250,8 +293,8 @@ namespace KnownUnknown
             foreach (MissionCheckData m in active)
             {
                 string start = m.StartScript.ToLowerInvariant();
-                int unread = Game.Unread(_index.Keys(start, Now));
-                if (unread == 0)
+                Tally count = Count(_index.Keys(start, Now));
+                if (!count.Any)
                     continue;
                 // 不用指定地點的任務，這一旬本來就會自己演，提示只是讓你知道
                 bool auto = m.Position == PositionType.無;
@@ -262,7 +305,7 @@ namespace KnownUnknown
                     Chance = auto ? "" : "必定",
                     Detail = "劇情" + (cast.Length > 0 ? ",登場：" + cast : ""),
                     Rank = auto ? -1 : 1000,
-                    Unread = unread,
+                    Count = count,
                 });
             }
         }
@@ -283,7 +326,7 @@ namespace KnownUnknown
                         || !_results.TryGetValue(i.Value, out PositionResultData pr))
                         continue;
                     Roll roll = RollOf(pr);
-                    if (roll.Unread == 0)
+                    if (!roll.Count.Any)
                         continue;
                     string action = _index.ActionOf(i.Value);
                     hints.Add(new Hint
@@ -292,7 +335,7 @@ namespace KnownUnknown
                         Chance = roll.Chance + "%",
                         Detail = "沒看過的結果：" + string.Join("、", roll.Unseen),
                         Rank = roll.Chance,
-                        Unread = roll.Unread,
+                        Count = roll.Count,
                     });
                 }
             }
