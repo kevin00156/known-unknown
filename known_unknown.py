@@ -458,6 +458,7 @@ def write_system_flags(game, path):
     written = system_written_flags(assets)
     system = [n for n in names if n.lower() in written]
     rels = sorted(system_written_relationships(assets).items(), key=lambda x: x[1])
+    deaths = combat_deaths(assets)
     with open(path, "w", encoding="utf-8") as f:
         f.write("// 由 known_unknown.py --system-flags 產生，別手改。遊戲更新後重跑。\n")
         f.write("namespace KnownUnknown\n{\n    internal static class SystemFlags\n    {\n")
@@ -472,8 +473,33 @@ def write_system_flags(game, path):
         f.write("        public static readonly int[] Relationships =\n        {\n")
         for n, t in rels:
             f.write(f"            {t},  // {n}\n")
+        f.write("        };\n\n")
+        f.write("        // 決鬥打輸會進生死簿的：luamanager.ChangeScene(\"Combat\", 鍵) 的鍵 -> 生死簿編號\n")
+        f.write("        public static readonly string[][] CombatDeaths =\n        {\n")
+        for k, d in deaths:
+            f.write(f'            new[] {{ "{k}", "{d}" }},\n')
         f.write("        };\n    }\n}\n")
-    print(f"{len(system)} 個旗標、{len(rels)} 個角色 → {path}")
+    print(f"{len(system)} 個旗標、{len(rels)} 個角色、{len(deaths)} 場決鬥 → {path}")
+
+
+def combat_deaths(assets):
+    """CombatManager.GameOver:打輸且 _deadEnd → 進 GameOver,生死簿查 _deadLibrary 的名字(沒設就是決鬥的鍵)。
+    戰場(Battle)打輸只會重來，不進生死簿。"""
+    dead = set()
+    for o in assets.by_cls["LibrarySystem"]:
+        coll = assets.deref(o, assets.tt(o)["_dead"])
+        dead |= {assets.tt(assets.deref(coll, p))["m_Name"] for p in assets.tt(coll)["_list"]}
+    out = []
+    for o in assets.by_cls["CombatLevel"]:
+        t = assets.tt(o)
+        if not t["_deadEnd"] or not t["m_Name"].startswith("CL_"):
+            continue
+        lib = assets.deref(o, t["_deadLibrary"])
+        key = t["m_Name"][3:]
+        d = assets.tt(lib)["m_Name"] if lib else key
+        if d in dead:
+            out.append((key, d))
+    return sorted(out)
 
 
 # 地點事件表在劇情場景(Story)的資產裡，地圖上沒載入。抽出事件表和它引用的同檔物件，插件在地圖上照原樣重建；

@@ -83,8 +83,8 @@ namespace KnownUnknown
         // 地點事件表名 -> 從選單哪個選項進去(選項字串)
         private readonly Dictionary<string, string> _actions = new Dictionary<string, string>();
 
-        // 旗標 -> 會寫入它的劇本(Lua SetFlag/AddFlag)
-        private readonly Dictionary<string, HashSet<string>> _flagWriters = new Dictionary<string, HashSet<string>>();
+        // 旗標 -> 會寫入它的劇本(Lua SetFlag/AddFlag) -> 寫進去的值；null = 什麼值都可能(AddFlag、非常數)
+        private readonly Dictionary<string, Dictionary<string, HashSet<int>>> _flagWriters = new Dictionary<string, Dictionary<string, HashSet<int>>>();
         // 旗標 -> Lua 寫進去過的值；null = 什麼值都可能(AddFlag、非常數)
         private readonly Dictionary<string, HashSet<int>> _flagValues = new Dictionary<string, HashSet<int>>();
         // 角色代號 -> 全部劇本加起來最多加多少好感、會加好感的劇本
@@ -93,8 +93,13 @@ namespace KnownUnknown
 
         public int TotalKeys { get; private set; }
 
-        public IEnumerable<string> FlagWriters(string flag) =>
-            _flagWriters.TryGetValue(flag, out HashSet<string> w) ? w : Enumerable.Empty<string>();
+        public IEnumerable<string> FlagWriters(string flag) => FlagWriters(flag, _ => true);
+
+        // 寫進去的值能讓 wants 成立的劇本；值不固定的一律算
+        public IEnumerable<string> FlagWriters(string flag, Func<int, bool> wants) =>
+            _flagWriters.TryGetValue(flag, out Dictionary<string, HashSet<int>> w)
+                ? w.Where(x => x.Value == null || x.Value.Any(wants)).Select(x => x.Key)
+                : Enumerable.Empty<string>();
 
         // Lua 會把旗標寫成哪些值；沒寫過 = 空集合，null = 什麼值都可能
         public HashSet<int> FlagValues(string flag) =>
@@ -132,9 +137,14 @@ namespace KnownUnknown
                 IndexActions(p.Value);
                 foreach (Item i in p.Value.Items.Where(i => i.Kind == ItemKind.Flag))
                 {
-                    if (!_flagWriters.TryGetValue(i.Value, out HashSet<string> w))
-                        _flagWriters[i.Value] = w = new HashSet<string>();
-                    w.Add(p.Key);
+                    if (!_flagWriters.TryGetValue(i.Value, out Dictionary<string, HashSet<int>> w))
+                        _flagWriters[i.Value] = w = new Dictionary<string, HashSet<int>>();
+                    if (i.Add)
+                        w[p.Key] = null;
+                    else if (!w.TryGetValue(p.Key, out HashSet<int> mine))
+                        w[p.Key] = new HashSet<int> { i.Number };
+                    else
+                        mine?.Add(i.Number);
                     bool known = _flagValues.TryGetValue(i.Value, out HashSet<int> vs);
                     if (i.Add)
                         _flagValues[i.Value] = null;
@@ -348,6 +358,7 @@ namespace KnownUnknown
                 Collect(l, "GetStoryText(\"", ItemKind.Key, guards, items);
                 CollectLibrary(l, "endgamepanel.Open(\"", Library.End, guards, items);
                 CollectLibrary(l, "luamanager.ChangeScene(\"GameOver\", \"", Library.Dead, guards, items);
+                CollectCombatDeath(l, guards, items);
                 Collect(l, "checkpointmanager.Position(\"", ItemKind.Position, guards, items);
                 CollectFlag(l, "statmodifymanager.SetFlag(\"", false, guards, items);
                 CollectFlag(l, "statmodifymanager.AddFlag(\"", true, guards, items);
@@ -391,6 +402,18 @@ namespace KnownUnknown
             string id = at < 0 ? null : Arg(line.Substring(at + call.Length - 1), 0);
             if (id != null)
                 items.Add(new Item { Kind = ItemKind.Library, Value = prefix + id, Guards = guards });
+        }
+
+        // 決鬥打輸會進生死簿的(SystemFlags.CombatDeaths):當成這裡看得到那一頁
+        private static readonly Dictionary<string, string> CombatDeaths = SystemFlags.CombatDeaths.ToDictionary(x => x[0], x => x[1]);
+
+        private static void CollectCombatDeath(string line, Guard[] guards, List<Item> items)
+        {
+            const string call = "luamanager.ChangeScene(\"Combat\", \"";
+            int at = line.IndexOf(call);
+            string key = at < 0 ? null : Arg(line.Substring(at + call.Length - 1), 0);
+            if (key != null && CombatDeaths.TryGetValue(key, out string id))
+                items.Add(new Item { Kind = ItemKind.Library, Value = Library.Dead + id, Guards = guards });
         }
 
         // SetFlag("F", 1) / AddFlag("F", -1);數字不是常數(SetFlag("F", var1))當成 Add:值不固定

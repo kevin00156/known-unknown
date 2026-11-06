@@ -274,17 +274,27 @@ namespace KnownUnknown
         private HashSet<string> Repeatable() =>
             _repeatable ?? (_repeatable = new HashSet<string>(_results.Values.SelectMany(pr => pr.List.Where(e => e != null).Select(e => ScriptOf(pr, e)))));
 
-        // 旗標去哪裡拿
-        private string FlagSource(FlagData f)
+        // 旗標去哪裡拿：只列寫進去的值合 wants 的劇本(ch6_4_1 只會把 M60014 寫成 0,要 1 的不能指去那裡)
+        private string FlagSource(FlagData f, System.Func<int, bool> wants)
         {
-            List<string> where = _index.FlagWriters(f.name)
+            // 現在的值就行了(「以下都不成立」裡已經不成立的那幾項),不用說去哪拿
+            if (wants(f.State))
+                return null;
+            List<string> writers = _index.FlagWriters(f.name, wants).ToList();
+            List<string> where = writers
                 .Select(s => _labels != null && _labels.TryGetValue(s, out string l) ? l : null)
                 .Where(l => l != null).Distinct().Take(2).ToList();
             if (where.Count > 0)
                 return "取得：" + string.Join("、", where);
             if (_systemFlags.Contains(f.name))
                 return "由戰鬥或遊戲系統設定";
-            return _index.FlagWriters(f.name).Any() ? "劇情中取得" : null;
+            if (writers.Any())
+                return "劇情中取得";
+            // 要的是開新遊戲的初始值(小師妹不在唐門 = 0):這一輪改不回去，換一輪才有
+            if (wants(Cond.Default(f)))
+                return "新一輪的初始值";
+            // 有劇情寫這個旗標，但寫的值都不合(攻略上官螢只會被設成 2,要 1 的拿不到);灰色判斷用範圍，不會把它判成不可能
+            return _index.FlagWriters(f.name).Any() ? "劇情只會設成別的值" : null;
         }
 
         // ---- 地點事件表 ----

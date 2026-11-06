@@ -428,8 +428,8 @@ namespace KnownUnknown
             return new List<ConditionResultItem>();
         }
 
-        // 這個分支要成立需要什麼(白話)。flagSource:旗標 → 取得處的說明
-        public string Need(Guard g, System.Func<FlagData, string> flagSource)
+        // 這個分支要成立需要什麼(白話)。flagSource:(旗標, 要的值) → 取得處的說明
+        public string Need(Guard g, System.Func<FlagData, System.Func<int, bool>, string> flagSource)
         {
             if (g.Kind == GuardKind.Choice && g.Gate != null && _conditions.TryGetValue(g.Gate, out ConditionResultData c))
                 return "選項出現要：" + string.Join(" 或 ", ConditionItems(c).Select(i => Describe(i, flagSource)));
@@ -446,20 +446,21 @@ namespace KnownUnknown
             if (g.Value >= 1 && g.Value <= items.Count)
                 return Describe(items[g.Value - 1], flagSource);
             // 最後一個分支：前面全部不成立
-            return "以下都不成立：" + string.Join("；", items.Select(i => Describe(i, flagSource)));
+            return "以下都不成立：" + string.Join("；", items.Select(i => Describe(i, flagSource, true)));
         }
 
-        public string Describe(ConditionResultItem c, System.Func<FlagData, string> flagSource)
+        // against:要的是這個條件不成立(取得處就找能讓比較不成立的值)
+        public string Describe(ConditionResultItem c, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against = false)
         {
             // 「且」只列還沒成立的；「或」全部列出(任一個成立就好)
             List<StatCompareItem> xs = Compares(c);
             bool and = LogicOp(c) == LogicOperatorType.AND;
             if (and && xs.Any(x => !Compare(x)))
                 xs = xs.Where(x => !Compare(x)).ToList();
-            return string.Join(and ? " 且 " : " 或 ", xs.Select(x => Describe(x, flagSource)));
+            return string.Join(and ? " 且 " : " 或 ", xs.Select(x => Describe(x, flagSource, against)));
         }
 
-        private string Describe(StatCompareItem x, System.Func<FlagData, string> flagSource)
+        private string Describe(StatCompareItem x, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against)
         {
             StatGroupVariable a = Value1(x), b = Value2(x);
             // 現在時間 vs 劇情用 SetMissionTime 記下的時間點：日期由劇情決定，寫日期反而誤導
@@ -467,9 +468,29 @@ namespace KnownUnknown
                 return CompareOp(x) == StatCompareType.Equal ? "到了劇情安排的那一旬" : $"時間 {Ops[CompareOp(x)]} 劇情安排的時間";
             string now = Constant(a) ? "" : $"(目前 {Show(a, Value(a))})";
             string text = $"{Name(a)} {Ops[CompareOp(x)]} {Show(a, Value(b))}{now}";
-            FlagData f = a == null ? null : Flags(a).FirstOrDefault();
-            string src = f == null ? null : flagSource(f);
+            // 取得處只對「一個旗標」比較；數值群組(旗標_攻略人數 = 幾個攻略旗標的和)拿其中一個的取得處會誤導
+            List<StatValueReference> refs = a == null ? new List<StatValueReference>() : Refs(a);
+            FlagData f = refs.Count == 1 && refs[0].CheckType == StatCheckType.旗標 ? FlagOf(refs[0]) : null;
+            string src = f == null ? null : flagSource(f, v => HoldsWith(x, f, v) != against);
             return src == null ? text : $"{text}[{src}]";
+        }
+
+        public static int Default(FlagData f) => FlagDefault(f);
+
+        // 旗標 f 是 v 的話，這個比較成不成立(其他值照現在的)
+        private bool HoldsWith(StatCompareItem x, FlagData f, int v)
+        {
+            Dictionary<FlagData, int> outer = _assume;
+            try
+            {
+                _assume = outer == null ? new Dictionary<FlagData, int>() : new Dictionary<FlagData, int>(outer);
+                _assume[f] = v;
+                return Compare(x);
+            }
+            finally
+            {
+                _assume = outer;
+            }
         }
 
         private static bool IsTime(StatGroupVariable v) =>
