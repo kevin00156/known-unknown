@@ -13,14 +13,18 @@ uv run python known_unknown.py --game "$GAME/Mortal_Data" --system-flags plugin/
 uv run python known_unknown.py --game "$GAME/Mortal_Data" --position-tables plugin/PositionTables.txt
 [ -z "$(git status --porcelain)" ] || { git status --short; echo "遊戲資料跟 repo 裡的不同(遊戲更新了?),看過、在遊戲裡測過再 commit" >&2; exit 1; }
 
-docker run --rm -v "$PWD/plugin":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \
-  mcr.microsoft.com/dotnet/sdk:8.0 dotnet build -c Release -p:GamePath=/game -o /src/bin/out
+for p in plugin updater; do
+  docker run --rm -v "$PWD/$p":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \
+    mcr.microsoft.com/dotnet/sdk:8.0 dotnet build -c Release -p:GamePath=/game -o /src/bin/out
+done
 
 OUT=$PWD/plugin/bin/release
 ZIP=$OUT/KnownUnknown-$VER.zip
 rm -rf "$OUT"
-mkdir -p "$OUT/stage/BepInEx/plugins/KnownUnknown"
+mkdir -p "$OUT/stage/BepInEx/plugins/KnownUnknown" "$OUT/stage/BepInEx/patchers/KnownUnknown"
 cp plugin/bin/out/KnownUnknown.dll LICENSE "$OUT/stage/BepInEx/plugins/KnownUnknown/"
+# 自動更新：下次啟動在插件載入前換上下載好的新版
+cp updater/bin/out/KnownUnknown.Updater.dll "$OUT/stage/BepInEx/patchers/KnownUnknown/"
 (cd "$OUT/stage" && zip -qr "$ZIP" BepInEx)
 
 git push origin HEAD

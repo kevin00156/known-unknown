@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>KnownUnknown.Updater</AssemblyName>
+    <RootNamespace>KnownUnknown.Updater</RootNamespace>
+    <!-- 盡量別改：玩家只有手動重新解壓 zip 才會換掉它(它自己被載入、換不了自己) -->
+    <Version>1.0.0</Version>
+    <DebugType>none</DebugType>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GamePath Condition="'$(GamePath)' == ''">$(HOME)/.steam/debian-installation/steamapps/common/LegendOfMortal</GamePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="$(GamePath)/BepInEx/core/BepInEx.Core.dll" Private="false" />
+    <Reference Include="$(GamePath)/BepInEx/core/BepInEx.Preloader.Core.dll" Private="false" />
+    <Reference Include="$(GamePath)/BepInEx/core/SemanticVersioning.dll" Private="false" />
+  </ItemGroup>
+</Project>

@@ -10,10 +10,14 @@
    解壓到遊戲資料夾(有 `Mortal.exe` 的那層；Steam 收藏庫裡對遊戲按右鍵 → 管理 → 瀏覽本機檔案)。
    啟動遊戲一次再關掉，資料夾裡會多出 `BepInEx/plugins`。
 2. 到 [Releases](https://github.com/kevin00156/known-unknown/releases) 下載最新的 `KnownUnknown-x.y.z.zip`,
-   解壓到同一個遊戲資料夾(zip 裡已經是 `BepInEx/plugins/KnownUnknown/KnownUnknown.dll`)。
+   解壓到同一個遊戲資料夾(zip 裡已經是 `BepInEx/plugins/KnownUnknown/` 和 `BepInEx/patchers/KnownUnknown/`)。
 3. 進遊戲按 **F2** 開關視窗。
 
-- 更新：下載新版 zip 覆蓋即可。移除：刪掉 `BepInEx/plugins/KnownUnknown` 資料夾。
+- **自動更新**：每次啟動遊戲，插件在背景查一次 GitHub 有沒有新版，有就下載、驗證(sha256、版本號)，
+  F2 視窗顯示「已下載新版 x.y.z，下次啟動遊戲生效」；下次啟動時 `patchers/KnownUnknown` 在插件載入前換上。
+  沒網路、下載壞掉、換檔失敗都沿用現有版本，只寫日誌。不想連網就在 `known-unknown.cfg` 的 `[Update]` 設 `AutoUpdate = false`,
+  之後要更新就自己下載新版 zip 覆蓋。只裝了 `plugins/KnownUnknown`(沒有 `patchers/`)的話不會自動下載，只在視窗提示有新版。
+- 移除：刪掉 `BepInEx/plugins/KnownUnknown` 和 `BepInEx/patchers/KnownUnknown` 兩個資料夾。
 - Steam Deck / Linux(Proton)：遊戲的啟動選項加上 `WINEDLLOVERRIDES="winhttp=n,b" %command%`,否則 BepInEx 不會載入。
 - 插件不讀也不寫存檔；「已讀」直接問遊戲。指定事件/擲骰的功能不想要可以在 `BepInEx/config/known-unknown.cfg` 設 `AllowForce = false`。
 - 沒反應時看 `BepInEx/LogOutput.log` 裡有沒有 `多玩10塊錢` 和 `[預載]` 開頭的行，回報問題時附上這個檔案。
@@ -98,6 +102,8 @@ uv run python known_unknown.py --rebuild     # 強制重建 ku-db.json(遊戲版
 | `ToggleKey` | F2 | 開關完整清單 |
 | `CountUnit` | Both | `Events` = 幾段劇情、`Lines` = 幾句台詞、`Both` = 「2 段・11 句」 |
 | `AllowForce` | true | 結果旁的勾選框：指定下次抽到它、在地圖上直接帶你去、擲骰指定擲出它 |
+| `AutoUpdate` | true | `[Update]` 段。啟動時查 GitHub 有沒有新版，有就背景下載，下次啟動換上；關掉就完全不連網 |
+| `UpdateSource` | GitHub API | `[Update]` 段。查新版的網址(releases/latest 的 JSON 格式)，開發測試用，平常不用改 |
 | `ShowLocked` | false | **會劇透**。也列出現版本未開放的白字(條件永遠不會成立，例如旗標不會變成要的值、好感加不到)，灰色。角色條件不夠的白字不受這個設定影響，一律列出(土黃色) |
 
 條件判斷全部自己重寫成只讀：遊戲的 `SwitchResultData/ConditionResultData.Execute()` 會讓計數 +1,
@@ -125,7 +131,14 @@ cp bin/out/KnownUnknown.dll "$GAME/BepInEx/plugins/KnownUnknown/"
 ```
 
 發版：先改 `plugin/KnownUnknown.csproj` 和 `plugin/Plugin.cs` 的版本號並 commit,再跑 `./release.sh [說明檔]`:
-建置、打包 `KnownUnknown-<版本>.zip`(`BepInEx/plugins/KnownUnknown/`)、push、建 GitHub Release `v<版本>`。
+建置、打包 `KnownUnknown-<版本>.zip`(`BepInEx/plugins/KnownUnknown/` + `BepInEx/patchers/KnownUnknown/`)、push、建 GitHub Release `v<版本>`。
+玩家端自動更新看的就是這個 release 的 zip(檔名要是 `KnownUnknown-*.zip`，裡面 DLL 的版本要等於 tag)。
+`updater/`(patcher)換不了自己，盡量別改；改了玩家要手動重新解壓 zip,插件會在日誌提醒。
+
+自動更新的本機測試：`UpdateSource` 指到本機 `python -m http.server` 放的假 `latest.json`
+(`{"tag_name":"v0.99.0","assets":[{"name":"KnownUnknown-0.99.0.zip","browser_download_url":"http://127.0.0.1:8765/…","digest":"sha256:…"}]}`)。
+下載用 `HttpWebRequest`:`UnityWebRequest` 在 Wine 下從 `release-assets.githubusercontent.com` 下載會收完資料卻一直不結束；
+`JsonUtility` 在插件組件裡填不進自訂類別的陣列，JSON 改用 `DataContractJsonSerializer`。
 
 開發用遙控插件(`dev/`,不隨 mod 發佈)：讀 `BepInEx/ku-cmd.txt` 的指令在遊戲內點 UI、透過 DiceMaster 指定地點事件、
 指定骰子點數、比對已讀台詞(`snap`/`diff`)，不用搶滑鼠鍵盤焦點就能自動測試。指令見 `dev/Remote.cs` 開頭。

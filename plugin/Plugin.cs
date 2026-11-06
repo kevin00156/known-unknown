@@ -28,6 +28,8 @@ namespace KnownUnknown
         private ConfigEntry<CountUnit> _countUnit;
         private ConfigEntry<bool> _showLocked;
         private ConfigEntry<bool> _allowForce;
+        private ConfigEntry<bool> _autoUpdate;
+        private ConfigEntry<string> _updateSource;
         private Harmony _harmony;
 
         // 劇本索引：讀檔在主執行緒，解析在背景
@@ -85,7 +87,11 @@ namespace KnownUnknown
                 "清單裡結果旁邊的勾選框 = 指定下次去那裡一定抽到它(取消勾選 = 取消);在地圖上勾會直接替你點地點、選行動。擲骰也一樣。會改變遊戲結果，不想要就關掉");
             Force.Enabled = Dice.Enabled = _allowForce.Value;
             _allowForce.SettingChanged += (_, __) => Force.Enabled = Dice.Enabled = _allowForce.Value;
-            Force.Log = Dice.Log = Preload.Log = m => Logger.LogInfo(m);
+            _autoUpdate = Config.Bind("Update", "AutoUpdate", true,
+                "啟動遊戲時查 GitHub 有沒有新版，有就在背景下載，下次啟動遊戲時換上(要有 zip 裡的 BepInEx/patchers/KnownUnknown)。關掉就完全不連網");
+            _updateSource = Config.Bind("Update", "UpdateSource", "https://api.github.com/repos/kevin00156/known-unknown/releases/latest",
+                "查新版的網址(GitHub releases/latest API 格式)。通常不用改");
+            Force.Log = Dice.Log = Preload.Log = SelfUpdate.Log = m => Logger.LogInfo(m);
             // SystemFlags(Lua 以外寫入的旗標/好感)是發版時從遊戲資料抽的，遊戲改版後可能少了新的寫入點
             Logger.LogInfo($"遊戲版本 {Application.version},插件資料 {SystemFlags.GameVersion}");
             if (Application.version != SystemFlags.GameVersion)
@@ -112,6 +118,8 @@ namespace KnownUnknown
             MenuSignals.OnMenuEnd += OnMenuEnd;
             SceneManager.sceneLoaded += OnSceneLoaded;
             Logger.LogInfo("多玩10塊錢 loaded");
+            if (_autoUpdate.Value)
+                SelfUpdate.Start(_updateSource.Value);
         }
 
         private void OnDestroy()
@@ -533,6 +541,8 @@ namespace KnownUnknown
                 ToggleLocked();
             if (_outdated != null)
                 GUILayout.Label(Paint.Color(Paint.Lacking, _outdated), _small);
+            if (SelfUpdate.Status != null)
+                GUILayout.Label(SelfUpdate.Status, _small);
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(560));
             // 指定了、但現在清單上沒列的(條件變了、換旬了)才另外列，不然勾了就找不到地方取消
             HashSet<string> listed = new HashSet<string>(_list.SelectMany(h => h.Outcomes).Where(Force.Is).Select(o => o.Table.name + "/" + o.Type));

@@ -29,6 +29,10 @@
     <Reference Include="$(Managed)/Fungus.dll" Private="false" />
     <Reference Include="$(Managed)/UnityEngine.UI.dll" Private="false" />
     <Reference Include="$(Managed)/Unity.InputSystem.dll" Private="false" />
+    <!-- 自動更新：解 zip、讀 GitHub 的 JSON -->
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Runtime.Serialization" />
   </ItemGroup>
 
   <ItemGroup>
