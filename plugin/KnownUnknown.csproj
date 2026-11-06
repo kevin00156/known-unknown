@@ -4,7 +4,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>KnownUnknown</AssemblyName>
     <RootNamespace>KnownUnknown</RootNamespace>
-    <Version>0.13.0</Version>
+    <Version>0.14.0</Version>
     <DebugType>none</DebugType>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
