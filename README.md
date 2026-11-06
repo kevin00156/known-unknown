@@ -1,6 +1,27 @@
 # known-unknown(多玩10塊錢)
 
-活俠傳(Legend of Mortal)未讀劇情盤點：列出哪些劇本還有白字，並排除現版本拿不到的劇本。
+活俠傳(Legend of Mortal)未讀劇情盤點：遊戲內按 F2，列出這一旬去哪裡、選哪個行動還看得到白字(沒讀過的台詞)、
+汗青書和生死簿，也可以指定下次抽到哪個事件、擲出哪個結果。功能說明見下方「遊戲內插件」。
+
+## 安裝(玩家)
+
+1. 安裝 **BepInEx 6**(Unity.Mono 版，**不是** BepInEx 5)：下載
+   [BepInEx-Unity.Mono-win-x64-6.0.0-be.789](https://builds.bepinex.dev/projects/bepinex_be/789/BepInEx-Unity.Mono-win-x64-6.0.0-be.789%2B6cea286.zip)，
+   解壓到遊戲資料夾(有 `Mortal.exe` 的那層；Steam 收藏庫裡對遊戲按右鍵 → 管理 → 瀏覽本機檔案)。
+   啟動遊戲一次再關掉，資料夾裡會多出 `BepInEx/plugins`。
+2. 到 [Releases](https://github.com/kevin00156/known-unknown/releases) 下載最新的 `KnownUnknown-x.y.z.zip`,
+   解壓到同一個遊戲資料夾(zip 裡已經是 `BepInEx/plugins/KnownUnknown/KnownUnknown.dll`)。
+3. 進遊戲按 **F2** 開關視窗。
+
+- 更新：下載新版 zip 覆蓋即可。移除：刪掉 `BepInEx/plugins/KnownUnknown` 資料夾。
+- Steam Deck / Linux(Proton)：遊戲的啟動選項加上 `WINEDLLOVERRIDES="winhttp=n,b" %command%`,否則 BepInEx 不會載入。
+- 插件不讀也不寫存檔；「已讀」直接問遊戲。指定事件/擲骰的功能不想要可以在 `BepInEx/config/known-unknown.cfg` 設 `AllowForce = false`。
+- 沒反應時看 `BepInEx/LogOutput.log` 裡有沒有 `多玩10塊錢` 和 `[預載]` 開頭的行，回報問題時附上這個檔案。
+- 遊戲改版後若插件還沒跟上，事件機率在第一次進劇情後會自己修好；灰色(未開放)的判斷可能暫時不準。
+
+## 離線 CLI(開發用)
+
+列出哪些劇本還有白字，並排除現版本拿不到的劇本。路徑寫死 Linux Steam 安裝位置，玩家不需要。
 
 ```
 uv run python known_unknown.py               # 自動找最新的 Save_universe.json
@@ -98,5 +119,12 @@ docker run --rm -v "$PWD":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \
 cp bin/out/KnownUnknown.dll "$GAME/BepInEx/plugins/KnownUnknown/"
 ```
 
+發版：先改 `plugin/KnownUnknown.csproj` 和 `plugin/Plugin.cs` 的版本號並 commit,再跑 `./release.sh [說明檔]`:
+建置、打包 `KnownUnknown-<版本>.zip`(`BepInEx/plugins/KnownUnknown/`)、push、建 GitHub Release `v<版本>`。
+
 開發用遙控插件(`dev/`,不隨 mod 發佈)：讀 `BepInEx/ku-cmd.txt` 的指令在遊戲內點 UI、透過 DiceMaster 指定地點事件、
 指定骰子點數、比對已讀台詞(`snap`/`diff`)，不用搶滑鼠鍵盤焦點就能自動測試。指令見 `dev/Remote.cs` 開頭。
+
+## 授權
+
+MIT,見 `LICENSE`。與 Obb Studio 無關；`plugin/PositionTables.txt` 是從遊戲資產抽出的事件表數值，著作權屬於原作者。
