@@ -444,6 +444,12 @@ def report(db, read, top, show_unreachable, only, spoil):
             print(f"  {cast} [{n}] {t} 句，已讀 {r}" + (f"\n    {why}" if why else "  (沒有入口)"))
 
 
+def game_version(game):
+    """Application.version(= PlayerSettings.bundleVersion)。產生的資料記下它，插件和 ku-db.json 用來判斷遊戲改版了沒。"""
+    env = UnityPy.load(f"{game}/globalgamemanagers")
+    return next(o.read_typetree()["bundleVersion"] for o in env.objects if o.type.name == "PlayerSettings")
+
+
 def write_system_flags(game, path):
     """插件執行時只看得到 Lua 的 SetFlag/AddFlag;Lua 以外(戰鬥、商店、設施…)寫入的旗標由這裡產生清單。
     兩邊都沒有的旗標 = 現版本拿不到，插件不提示。遊戲更新後重跑。"""
@@ -455,6 +461,8 @@ def write_system_flags(game, path):
     with open(path, "w", encoding="utf-8") as f:
         f.write("// 由 known_unknown.py --system-flags 產生，別手改。遊戲更新後重跑。\n")
         f.write("namespace KnownUnknown\n{\n    internal static class SystemFlags\n    {\n")
+        f.write("        // 產生時的遊戲版本(Application.version);插件啟動時對不上就警告\n")
+        f.write(f'        public const string GameVersion = "{game_version(game)}";\n\n')
         f.write("        // Lua 以外(戰鬥、商店、設施、任務…)會寫入的旗標\n")
         f.write("        public static readonly string[] Names =\n        {\n")
         for n in system:
@@ -536,7 +544,7 @@ def write_position_tables(game, path):
     objects.sort(key=lambda x: x["id"])
     # 外層不用 JSON:插件的 JsonUtility 只認遊戲組件裡的型別。一行一筆、tab 分隔(json.dumps 會跳脫 tab/換行)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(f"{os.path.getsize(f'{game}/{POSITION_FILE}')}\n")
+        f.write(f"{os.path.getsize(f'{game}/{POSITION_FILE}')}\t{game_version(game)}\n")
         for e in externals:
             f.write(f"E\t{e['type']}\t{e['name']}\n")
         for o in objects:
@@ -574,12 +582,19 @@ def main():
                 f.write(t)
         return
 
-    if a.rebuild or not os.path.exists(a.cache):
+    version = game_version(a.game)
+    db = None
+    if not a.rebuild and os.path.exists(a.cache):
+        with open(a.cache, encoding="utf-8") as f:
+            db = json.load(f)
+        if db.get("version") != version:
+            print(f"遊戲版本 {db.get('version')} → {version},重建 {a.cache}", file=sys.stderr)
+            db = None
+    if db is None:
         db = build(a.game)
+        db["version"] = version
         with open(a.cache, "w", encoding="utf-8") as f:
             json.dump(db, f, ensure_ascii=False)
-    with open(a.cache, encoding="utf-8") as f:
-        db = json.load(f)
     with open(a.save or find_save(), encoding="utf-8-sig") as f:
         read = set(json.load(f)["ReadStoryData"])
     report(db, read, a.top if a.top > 0 else 10**9, a.unreachable, a.only, a.spoil)

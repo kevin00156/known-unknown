@@ -1,4 +1,4 @@
-25655088
+25655088	release_1.0.6001.0
 E	StatGroupVariable	常數_0
 E	StatGroupVariable	常數_1
 E	StatGroupVariable	常數_2

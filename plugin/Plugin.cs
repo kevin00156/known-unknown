@@ -62,6 +62,7 @@ namespace KnownUnknown
         private GUIStyle _windowStyle;
         private GUIStyle _picked;
         private GUIStyle _check;
+        private string _outdated;   // 遊戲改版、插件資料還沒跟上時的警告；null = 版本一致
 
         private void Awake()
         {
@@ -85,6 +86,13 @@ namespace KnownUnknown
             Force.Enabled = Dice.Enabled = _allowForce.Value;
             _allowForce.SettingChanged += (_, __) => Force.Enabled = Dice.Enabled = _allowForce.Value;
             Force.Log = Dice.Log = Preload.Log = m => Logger.LogInfo(m);
+            // SystemFlags(Lua 以外寫入的旗標/好感)是發版時從遊戲資料抽的，遊戲改版後可能少了新的寫入點
+            Logger.LogInfo($"遊戲版本 {Application.version},插件資料 {SystemFlags.GameVersion}");
+            if (Application.version != SystemFlags.GameVersion)
+            {
+                _outdated = $"遊戲版本({Application.version})和插件資料({SystemFlags.GameVersion})不同(遊戲更新了?):灰色(未開放)的判斷可能不準，等插件更新。";
+                Logger.LogWarning(_outdated);
+            }
             Tally.Unit = _countUnit.Value;
             _countUnit.SettingChanged += (_, __) =>
             {
@@ -523,6 +531,8 @@ namespace KnownUnknown
         {
             if (GUILayout.Toggle(_showLocked.Value, " 也顯示現版本未開放的劇情(灰色，會劇透)") != _showLocked.Value)
                 ToggleLocked();
+            if (_outdated != null)
+                GUILayout.Label(Paint.Color(Paint.Lacking, _outdated), _small);
             _scroll = GUILayout.BeginScrollView(_scroll, GUILayout.Height(560));
             // 指定了、但現在清單上沒列的(條件變了、換旬了)才另外列，不然勾了就找不到地方取消
             HashSet<string> listed = new HashSet<string>(_list.SelectMany(h => h.Outcomes).Where(Force.Is).Select(o => o.Table.name + "/" + o.Type));
@@ -540,7 +550,7 @@ namespace KnownUnknown
                 DrawDice();
             GUILayout.Label("本旬 — " + _summary);
             if (_hints != null && !_hints.HasResults)
-                GUILayout.Label("內建的地點事件表和遊戲版本對不上(見日誌 [預載]),進過一次地點後才算得出各地點機率。");
+                GUILayout.Label("內建的地點事件表和遊戲版本對不上(見日誌 [預載]),進過一次劇情後才算得出各地點機率(之後啟動會用存好的)。");
             else if (_list.Count == 0 && _hints != null)
                 GUILayout.Label("這一旬沒有找到會出現白字的任務或地點事件。");
             foreach (Hint h in _list)

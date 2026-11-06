@@ -91,7 +91,9 @@ namespace KnownUnknown
             })
             {
                 string[][] lines = source.Value();
-                if (lines == null || lines.Length == 0 || !file.Exists || !long.TryParse(lines[0][0], out long size) || size != file.Length)
+                // 第一行：資產檔大小<tab>遊戲版本(舊快取沒有版本，只比大小)
+                if (lines == null || lines.Length == 0 || !file.Exists || !long.TryParse(lines[0][0], out long size) || size != file.Length
+                    || lines[0].Length > 1 && lines[0][1] != Application.version)
                     continue;
                 try
                 {
@@ -112,7 +114,7 @@ namespace KnownUnknown
             return new List<ScriptableObject>();
         }
 
-        // 第一行 = 劇情場景資產檔大小；E<tab>類別<tab>名字 = 常駐物件；O<tab>完整類別<tab>名字<tab>JSON<tab>引用 = 要新建的
+        // 第一行 = 劇情場景資產檔大小<tab>遊戲版本；E<tab>類別<tab>名字 = 常駐物件；O<tab>完整類別<tab>名字<tab>JSON<tab>引用 = 要新建的
         private static string[][] Parse(string text) =>
             text.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Split('\t')).ToArray();
 
@@ -347,7 +349,7 @@ namespace KnownUnknown
                 lines.Add($"O\t{o.GetType().FullName}\t{o.name}\t{json}\t{string.Join("|", refs)}");
             }
             long size = new FileInfo(Path.Combine(Application.dataPath, AssetsFile)).Length;
-            return size + "\n" + string.Concat(exts.OrderBy(x => x.Value).Select(x => $"E\t{x.Key}\n")) + string.Join("\n", lines) + "\n";
+            return size + "\t" + Application.version + "\n" + string.Concat(exts.OrderBy(x => x.Value).Select(x => $"E\t{x.Key}\n")) + string.Join("\n", lines) + "\n";
         }
 
         // 照 Unity 序列化的規則走欄位，找出所有指到 UnityEngine.Object 的(路徑格式同 Set)

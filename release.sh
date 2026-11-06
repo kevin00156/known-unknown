@@ -8,6 +8,10 @@ GAME=${GAME:-$HOME/.steam/debian-installation/steamapps/common/LegendOfMortal}
 VER=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' plugin/KnownUnknown.csproj)
 grep -q "\"known-unknown\", \"多玩10塊錢\", \"$VER\"" plugin/Plugin.cs || { echo "Plugin.cs 的版本不是 $VER" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "工作區有沒 commit 的改動" >&2; exit 1; }
+# 編進插件的遊戲資料照目前安裝的遊戲重新產生；有變 = 遊戲更新過，先 commit 再發版
+uv run python known_unknown.py --game "$GAME/Mortal_Data" --system-flags plugin/SystemFlags.cs
+uv run python known_unknown.py --game "$GAME/Mortal_Data" --position-tables plugin/PositionTables.txt
+[ -z "$(git status --porcelain)" ] || { git status --short; echo "遊戲資料跟 repo 裡的不同(遊戲更新了?),看過、在遊戲裡測過再 commit" >&2; exit 1; }
 
 docker run --rm -v "$PWD/plugin":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \
   mcr.microsoft.com/dotnet/sdk:8.0 dotnet build -c Release -p:GamePath=/game -o /src/bin/out

@@ -3,6 +3,9 @@ namespace KnownUnknown
 {
     internal static class SystemFlags
     {
+        // 產生時的遊戲版本(Application.version);插件啟動時對不上就警告
+        public const string GameVersion = "release_1.0.6001.0";
+
         // Lua 以外(戰鬥、商店、設施、任務…)會寫入的旗標
         public static readonly string[] Names =
         {

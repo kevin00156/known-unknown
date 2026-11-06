@@ -28,7 +28,7 @@ uv run python known_unknown.py               # 自動找最新的 Save_universe.
 uv run python known_unknown.py --top 0       # 全列
 uv run python known_unknown.py --only 第8章   # 只看某分類(第N章/支線/談話/養成…)
 uv run python known_unknown.py --unreachable # 順便列出判定不可達的劇本與原因
-uv run python known_unknown.py --rebuild     # 遊戲更新後重建 ku-db.json
+uv run python known_unknown.py --rebuild     # 強制重建 ku-db.json(遊戲版本變了會自動重建)
 ```
 
 ## 原理
@@ -105,8 +105,12 @@ DiceMaster 在 `PositionEventData.GetRate()` 上掛了 patch(呼叫會吃掉玩�
 `plugin/SystemFlags.cs` 是 Lua 以外(戰鬥、商店、設施、談話選項重設…)會寫入的旗標，和會改好感的角色(新一輪繼承、商店、戰鬥)，遊戲更新後用
 `uv run python known_unknown.py --system-flags plugin/SystemFlags.cs` 重新產生。
 `plugin/PositionTables.txt`(預載的地點事件表)同樣在遊戲更新後用
-`uv run python known_unknown.py --position-tables plugin/PositionTables.txt` 重新產生；沒重跑的話插件發現資產檔大小不同，
-不會用舊資料：那一次啟動退回「進過一次劇情才有機率」，之後用自己存的快取。
+`uv run python known_unknown.py --position-tables plugin/PositionTables.txt` 重新產生。`release.sh` 發版前會自動重跑這兩個，
+內容有變(遊戲更新過)就停下來，看過、在遊戲裡測過再 commit。
+
+兩份產物都記下產生時的遊戲版本(`Application.version` = PlayerSettings 的 bundleVersion,例如 `release_1.0.6001.0`)。
+插件啟動時比對，遊戲版本不同就在日誌和 F2 視窗最上面警告「灰色(未開放)的判斷可能不準」(SystemFlags 可能少了新的寫入點)。
+PositionTables 版本或資產檔大小對不上就不用：那一次啟動退回「進過一次劇情才有機率」，之後用插件自己存的快取(快取也記版本)。
 
 已讀判斷直接問 `ReadStorySystem.ExistKey`,不讀不寫存檔。
 
