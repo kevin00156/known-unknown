@@ -5,6 +5,7 @@ using HarmonyLib;
 using Mortal.Core;
 using Mortal.Free;
 using Mortal.Story;
+using OBB.Framework.Extensions;
 using UnityEngine;
 
 namespace KnownUnknown
@@ -63,7 +64,9 @@ namespace KnownUnknown
 
         public static string Color(string color, string s) => $"<color={color}>{s}</color>";
 
-        public static string Plain(string s) => Regex.Replace(s, "</?color[^>]*>", "");
+        // 日誌用：拿掉顏色，灰色的標「(未開放)」
+        public static string Plain(string s) =>
+            (s.StartsWith($"<color={Closed}>") ? "(未開放)" : "") + Regex.Replace(s, "</?color[^>]*>", "");
     }
 
     // 一個入口的白字：現在走得到的，和被條件擋住的(原因 → 白字)
@@ -164,6 +167,8 @@ namespace KnownUnknown
         {
             _cond.Capture();
             Preload.Merge(_results, p => p.name.ToLowerInvariant(), (a, b) => Preload.Mismatches(a, b, Rate), "地點事件表");
+            Preload.SaveIfStale();
+            _repeatable = null;
         }
 
         // 有自己入口的劇本(任務起點)。算「後續劇情」時走到這裡就停，免得主線一路串到結局。
@@ -190,8 +195,8 @@ namespace KnownUnknown
                     o.Open.Add(x.Key.Value);
                     continue;
                 }
-                // 現版本拿不到的條件(旗標沒有任何地方寫入)：沒勾就當它不存在
-                bool closed = blockers.Any(g => _cond.Impossible(g, Obtainable));
+                // 現版本不可能成立的條件(旗標不會變成要的值、好感加不到)：沒勾就當它不存在
+                bool closed = blockers.Any(g => _cond.Impossible(g, FlagValues, Gain));
                 if (closed && !ShowLocked)
                     continue;
                 List<string> needs = blockers.Select(g => _cond.Need(g, FlagSource)).Where(w => w != null).Distinct().ToList();
@@ -247,8 +252,27 @@ namespace KnownUnknown
             return w;
         }
 
-        // 這個旗標拿得到嗎：Lua 有寫入，或遊戲系統會寫入
-        private bool Obtainable(FlagData f) => _index.FlagWriters(f.name).Any() || _systemFlags.Contains(f.name);
+        // 旗標還可能被寫成哪些值：Lua 寫過的值；遊戲系統會寫入的不知道寫什麼，null = 什麼都可能
+        private HashSet<int> FlagValues(FlagData f) => _systemFlags.Contains(f.name) ? null : _index.FlagValues(f.name);
+
+        // Lua 以外會改好感的角色(新一輪繼承、商店、戰鬥)
+        private static readonly HashSet<int> SystemRelationships = new HashSet<int>(SystemFlags.Relationships);
+
+        // 好感最多加多少；null = 沒上限。地點事件的結果劇本可以一直抽，有一份會加好感就沒上限
+        // (劉顎：女弟子房偷窺失敗每次 +1,第 5 章前都能刷)
+        private int? Gain(RelationshipStat r)
+        {
+            string id = r.Type.GetStringValue();
+            if (SystemRelationships.Contains((int)r.Type) || _index.GainWriters(id).Any(Repeatable().Contains))
+                return null;
+            return _index.Gain(id);
+        }
+
+        private HashSet<string> _repeatable;
+
+        // 地點事件表抽得到的結果劇本
+        private HashSet<string> Repeatable() =>
+            _repeatable ?? (_repeatable = new HashSet<string>(_results.Values.SelectMany(pr => pr.List.Where(e => e != null).Select(e => ScriptOf(pr, e)))));
 
         // 旗標去哪裡拿
         private string FlagSource(FlagData f)

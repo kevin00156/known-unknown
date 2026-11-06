@@ -19,7 +19,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.12.3")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.13.0")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
@@ -204,6 +204,8 @@ namespace KnownUnknown
         // 進劇情時地點事件表才載入，趁這時抓
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
+            if (scene.name == "Title")
+                Preload.Remember();
             _hints?.Capture();
             _signature = null;
             // 回到地圖：這一趟結束了，沒按到的選項不再等

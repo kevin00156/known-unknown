@@ -46,7 +46,7 @@ namespace KnownUnknown
         public string Value;
         public Guard[] Guards;
         public int Number;    // Flag:設成/加上多少
-        public bool Add;      // Flag:AddFlag
+        public bool Add;      // Flag:AddFlag,或設成非常數(SetFlag("F", var1)):值不固定
     }
 
     // 一份劇本解析後的樣子
@@ -56,6 +56,8 @@ namespace KnownUnknown
         // 選項字串 -> (choice 變數, 第幾個)
         public Dictionary<string, KeyValuePair<string, int>> Options = new Dictionary<string, KeyValuePair<string, int>>();
         public string[] Cast;
+        // 角色代號(girl5、special1)-> 這份劇本最多加多少好感(每個加好感的呼叫都算一次，不管在哪個分支)
+        public Dictionary<string, int> Gains = new Dictionary<string, int>();
     }
 
     // 劇本解析與靜態關係。遊戲啟動後建一次，內容不會變。
@@ -83,11 +85,26 @@ namespace KnownUnknown
 
         // 旗標 -> 會寫入它的劇本(Lua SetFlag/AddFlag)
         private readonly Dictionary<string, HashSet<string>> _flagWriters = new Dictionary<string, HashSet<string>>();
+        // 旗標 -> Lua 寫進去過的值；null = 什麼值都可能(AddFlag、非常數)
+        private readonly Dictionary<string, HashSet<int>> _flagValues = new Dictionary<string, HashSet<int>>();
+        // 角色代號 -> 全部劇本加起來最多加多少好感、會加好感的劇本
+        private readonly Dictionary<string, int> _gains = new Dictionary<string, int>();
+        private readonly Dictionary<string, HashSet<string>> _gainWriters = new Dictionary<string, HashSet<string>>();
 
         public int TotalKeys { get; private set; }
 
         public IEnumerable<string> FlagWriters(string flag) =>
             _flagWriters.TryGetValue(flag, out HashSet<string> w) ? w : Enumerable.Empty<string>();
+
+        // Lua 會把旗標寫成哪些值；沒寫過 = 空集合，null = 什麼值都可能
+        public HashSet<int> FlagValues(string flag) =>
+            _flagValues.TryGetValue(flag, out HashSet<int> v) ? v : new HashSet<int>();
+
+        // 好感最多加多少：每份劇本、每個加好感的呼叫都只算一次。會重複演的劇本(地點事件)由呼叫端另外判斷
+        public int Gain(string character) => _gains.TryGetValue(character, out int g) ? g : 0;
+
+        public IEnumerable<string> GainWriters(string character) =>
+            _gainWriters.TryGetValue(character, out HashSet<string> w) ? w : Enumerable.Empty<string>();
 
         // 只能在主執行緒呼叫(Unity API)
         public static KeyValuePair<string, string>[] Load()
@@ -117,6 +134,20 @@ namespace KnownUnknown
                 {
                     if (!_flagWriters.TryGetValue(i.Value, out HashSet<string> w))
                         _flagWriters[i.Value] = w = new HashSet<string>();
+                    w.Add(p.Key);
+                    bool known = _flagValues.TryGetValue(i.Value, out HashSet<int> vs);
+                    if (i.Add)
+                        _flagValues[i.Value] = null;
+                    else if (!known)
+                        _flagValues[i.Value] = new HashSet<int> { i.Number };
+                    else
+                        vs?.Add(i.Number);
+                }
+                foreach (KeyValuePair<string, int> g in p.Value.Gains)
+                {
+                    _gains[g.Key] = Gain(g.Key) + g.Value;
+                    if (!_gainWriters.TryGetValue(g.Key, out HashSet<string> w))
+                        _gainWriters[g.Key] = w = new HashSet<string>();
                     w.Add(p.Key);
                 }
             }
@@ -320,6 +351,8 @@ namespace KnownUnknown
                 Collect(l, "checkpointmanager.Position(\"", ItemKind.Position, guards, items);
                 CollectFlag(l, "statmodifymanager.SetFlag(\"", false, guards, items);
                 CollectFlag(l, "statmodifymanager.AddFlag(\"", true, guards, items);
+                CollectGain(l, "statmodifymanager.Character(\"", script.Gains);
+                CollectGain(l, "statmodifymanager.SetCharacter(\"", script.Gains);
                 foreach (string t in Transitions)
                     Collect(l, t, ItemKind.Script, guards, items);
             }
@@ -360,20 +393,40 @@ namespace KnownUnknown
                 items.Add(new Item { Kind = ItemKind.Library, Value = prefix + id, Guards = guards });
         }
 
-        // SetFlag("F", 1) / AddFlag("F", -1);數字不是常數(SetFlag("F", var1))就不記
+        // SetFlag("F", 1) / AddFlag("F", -1);數字不是常數(SetFlag("F", var1))當成 Add:值不固定
         private static void CollectFlag(string line, string call, bool add, Guard[] guards, List<Item> items)
         {
+            string name = Arg(line, call, out string num);
+            if (name == null)
+                return;
+            bool constant = int.TryParse(num, out int n);
+            items.Add(new Item { Kind = ItemKind.Flag, Value = name, Guards = guards, Number = n, Add = add || !constant });
+        }
+
+        // Character("special1", 2, 1) 加好感 2;SetCharacter("special403", 0) 設成 0。只記會變高的
+        private static void CollectGain(string line, string call, Dictionary<string, int> gains)
+        {
+            string name = Arg(line, call, out string num);
+            if (name != null && int.TryParse(num, out int n) && n > 0)
+                gains[name] = (gains.TryGetValue(name, out int g) ? g : 0) + n;
+        }
+
+        // call("名字", 數字…) 的名字和第二個參數(原字串)
+        private static string Arg(string line, string call, out string second)
+        {
+            second = null;
             int at = line.IndexOf(call);
             if (at < 0)
-                return;
+                return null;
             string rest = line.Substring(at + call.Length - 1);
             string name = Arg(rest, 0);
             int comma = rest.IndexOf(',');
             int close = rest.IndexOf(')');
-            if (name == null || comma < 0 || close < comma
-                || !int.TryParse(rest.Substring(comma + 1, close - comma - 1).Trim(), out int n))
-                return;
-            items.Add(new Item { Kind = ItemKind.Flag, Value = name, Guards = guards, Number = n, Add = add });
+            if (name == null || comma < 0 || close < comma)
+                return null;
+            int end = rest.IndexOf(',', comma + 1);
+            second = rest.Substring(comma + 1, (end > comma && end < close ? end : close) - comma - 1).Trim();
+            return name;
         }
 
         // s 裡第一個 "…" 的內容

@@ -38,6 +38,12 @@ namespace KnownUnknown
             AccessTools.FieldRefAccess<StatGroupVariable, List<StatValueReference>>("_value");
         private static readonly AccessTools.FieldRef<StatValueReference, FlagData> FlagOf =
             AccessTools.FieldRefAccess<StatValueReference, FlagData>("_flag");
+        private static readonly AccessTools.FieldRef<StatValueReference, RelationshipStat> RelationshipOf =
+            AccessTools.FieldRefAccess<StatValueReference, RelationshipStat>("_relationship");
+        private static readonly AccessTools.FieldRef<FlagData, int> FlagDefault =
+            AccessTools.FieldRefAccess<FlagData, int>("_default");
+        private static readonly AccessTools.FieldRef<RelationshipStat, int> RelationshipDefault =
+            AccessTools.FieldRefAccess<RelationshipStat, int>("_default");
         private static readonly AccessTools.FieldRef<StatValueReference, ConditionResultData> ConditionOf =
             AccessTools.FieldRefAccess<StatValueReference, ConditionResultData>("_condition");
         private static readonly AccessTools.FieldRef<StatValueReference, StatGroupVariable> GroupOf =
@@ -304,24 +310,111 @@ namespace KnownUnknown
             }
         }
 
-        // 現版本不可能成立：要成立的條件裡，有比較只牽涉到拿不到的旗標(永遠停在現在的值)而且現在不成立
-        public bool Impossible(Guard g, System.Func<FlagData, bool> obtainable)
+        // 現版本不可能成立(哪一輪都一樣)：要成立的條件裡，有比較兩邊的可能範圍碰不到(兩邊都是常數的不算)。
+        // 範圍從開新遊戲的預設值算起，不是這一局現在的值：這一局錯過的分支，換一輪還看得到，那是「條件不足」。
+        // flagValues:旗標會被寫成哪些值(null = 什麼都可能)；gain:好感最多加多少(null = 沒上限)
+        public bool Impossible(Guard g, System.Func<FlagData, HashSet<int>> flagValues, System.Func<RelationshipStat, int?> gain)
         {
             List<ConditionResultItem> need = Needed(g);
-            return need.Count > 0 && need.All(c => Impossible(c, obtainable));
+            return need.Count > 0 && need.All(c => Impossible(c, new Bounds { FlagValues = flagValues, Gain = gain }));
         }
 
-        private bool Impossible(ConditionResultItem c, System.Func<FlagData, bool> obtainable)
+        private bool Impossible(ConditionResultItem c, Bounds b)
         {
-            bool Dead(StatCompareItem x)
-            {
-                List<StatValueReference> refs = Refs(Value1(x)).Concat(Value2(x) == null ? new List<StatValueReference>() : Refs(Value2(x))).ToList();
-                return refs.Any(r => r.CheckType == StatCheckType.旗標)
-                    && refs.All(r => r.CheckType == StatCheckType.常數 || r.CheckType == StatCheckType.旗標 && !obtainable(FlagOf(r)))
-                    && !Compare(x);
-            }
+            bool Dead(StatCompareItem x) =>
+                !(Constant(Value1(x)) && Constant(Value2(x))) && !Overlaps(Range(Value1(x), b), Range(Value2(x), b), CompareOp(x));
             List<StatCompareItem> xs = Compares(c);
             return LogicOp(c) == LogicOperatorType.AND ? xs.Any(Dead) : xs.All(Dead);
+        }
+
+        private class Bounds
+        {
+            public System.Func<FlagData, HashSet<int>> FlagValues;
+            public System.Func<RelationshipStat, int?> Gain;
+        }
+
+        // 值可能落在 [Lo, Hi]
+        private struct Span
+        {
+            public int Lo, Hi;
+
+            public Span(int lo, int hi)
+            {
+                Lo = System.Math.Min(lo, hi);
+                Hi = System.Math.Max(lo, hi);
+            }
+        }
+
+        private static bool Overlaps(Span? a, Span? b, StatCompareType op)
+        {
+            if (a == null || b == null)
+                return true;
+            Span x = a.Value, y = b.Value;
+            switch (op)
+            {
+                case StatCompareType.Equal: return x.Lo <= y.Hi && y.Lo <= x.Hi;
+                case StatCompareType.NotEqual: return !(x.Lo == x.Hi && y.Lo == y.Hi && x.Lo == y.Lo);
+                case StatCompareType.Less: return x.Lo < y.Hi;
+                case StatCompareType.LessEqual: return x.Lo <= y.Hi;
+                case StatCompareType.Greater: return x.Hi > y.Lo;
+                case StatCompareType.GreaterEqual: return x.Hi >= y.Lo;
+                default: return true;
+            }
+        }
+
+        // 現版本可能的範圍；null = 不知道
+        private Span? Range(StatGroupVariable v, Bounds b)
+        {
+            if (v == null)
+                return new Span(0, 0);
+            List<Span> xs = new List<Span>();
+            foreach (StatValueReference r in Refs(v))
+            {
+                Span? x = Range(r, b);
+                if (x == null)
+                    return null;
+                xs.Add(x.Value);
+            }
+            if (xs.Count == 0)
+                return new Span(0, 0);
+            switch (GroupType(v))
+            {
+                case StatGroupType.Max: return new Span(xs.Max(x => x.Lo), xs.Max(x => x.Hi));
+                case StatGroupType.Min: return new Span(xs.Min(x => x.Lo), xs.Min(x => x.Hi));
+                case StatGroupType.Multiply: return null;
+                default: return new Span(xs.Sum(x => x.Lo), xs.Sum(x => x.Hi));
+            }
+        }
+
+        private Span? Range(StatValueReference r, Bounds b)
+        {
+            int sign = Negative(r) ? -1 : 1;
+            switch (r.CheckType)
+            {
+                case StatCheckType.常數:
+                    return new Span(r.GetValue(), r.GetValue());
+                case StatCheckType.數值群組:
+                    return Range(GroupOf(r), b);
+                case StatCheckType.旗標:
+                    FlagData f = FlagOf(r);
+                    if (f == null)
+                        return new Span(0, 0);
+                    HashSet<int> vs = b.FlagValues(f);
+                    if (vs == null)
+                        return null;
+                    // 預設值、現在的值(假設的也算)、寫得進去的值
+                    List<int> all = vs.Concat(new[] { FlagDefault(f), State(f, _assume) }).ToList();
+                    return new Span(sign * all.Min(), sign * all.Max());
+                case StatCheckType.好感度:
+                    // 好感夾在 0..100(RelationshipStat._max 都是 100);會降，下限一律當 0
+                    RelationshipStat rel = RelationshipOf(r);
+                    int? g = rel == null ? null : b.Gain(rel);
+                    if (g == null)
+                        return null;
+                    return new Span(0, sign * System.Math.Min(100, System.Math.Max(rel.Value, RelationshipDefault(rel) + g.Value)));
+                default:
+                    return null;
+            }
         }
 
         // 分支成立要哪些條件之一成立(Switch 第 N 個分支 = 第 N 個條件；選項 = 任一條件)。最後的「其他」分支不算

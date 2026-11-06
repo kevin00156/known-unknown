@@ -29,14 +29,19 @@ POSITION_KEYS = ["", "Mall", "Center", "Alchemy", "Forge", "BackMountain", "Room
 STAGE = {1: "上旬", 2: "中旬", 3: "下旬"}
 COMPARE = ["=", "!=", "<", "<=", ">", ">="]
 CHECK_CONST, CHECK_FLAG = 0, 3            # StatCheckType.常數 / 旗標
-# C# 直接寫死名字的旗標(SaveSystem / MissionManagerData)
-CODE_WRITTEN_FLAGS = {"demo", "newgameplus", "alpha_001"}
+# C# 直接寫死名字的旗標(SaveSystem / MissionManagerData / PlayerStatManagerData.ResetActionCount)
+CODE_WRITTEN_FLAGS = {"demo", "newgameplus", "alpha_001", "s9001", "t0002"}
 # 指到 FlagData 但只讀不寫的類別(看過反編譯確認)。不在這裡的類別一律當成會寫。
 FLAG_READERS = {"StatGroupVariable", "FlagData",
                 "FlagCollectionData",           # 總表；依名字寫入的路徑已由 Lua SetFlag/AddFlag 涵蓋
                 "TestFlagStatPanel",            # 除錯面板
                 "CombatEventConditionPlayerStat", "CombatEventConditionRoundFlag",
                 "DiceResultData", "FlagDataRateConvertData"}
+# 指到 RelationshipStat 但只讀不寫的類別(看過反編譯確認)。其他一律當成會寫(SocialBonusStatData = 新一輪繼承好感)
+RELATIONSHIP_READERS = {"RelationshipData", "StatGroupVariable", "DiceResultData", "SocialCharacterButton",
+                        "TestRelationshipStatPanel", "CombatEventConditionPlayerStat"}
+# C# 直接改好感的角色(RelationshipStatType 值):四師兄 = StatModifyManager.UpdateShopFlag(商店)
+CODE_WRITTEN_RELATIONSHIPS = {4}
 
 KEY_RE = re.compile(r'GetStoryText\("([^"]+)"\)')
 CAST_RE = re.compile(r'characters\.Get\("([^"]+)"\)')
@@ -113,14 +118,40 @@ class Assets:
 
 def written_flags(assets, scripts):
     """會被寫入的旗標名(小寫)。寧可多算：多算只會讓「不可能」判得比較少，不會誤殺。"""
-    out = set(CODE_WRITTEN_FLAGS)
+    out = system_written_flags(assets)
     for t in scripts.values():
         out |= {s.lower() for s in FLAG_WRITE_RE.findall(t)}
+    return out
+
+
+def system_written_flags(assets):
+    """Lua 以外會寫入的旗標名(小寫)。插件不知道這些會被寫成什麼值，一律當成什麼值都可能。"""
+    out = set(CODE_WRITTEN_FLAGS)
     flags = {(o.assets_file.name, o.path_id): assets.tt(o)["m_Name"].lower() for o in assets.by_cls["FlagData"]}
+    # statmodifymanager.ResetTalkFlag() 把談話選項旗標集合整批設回預設值
+    for o in assets.by_cls["StatModifyManager"]:
+        coll = assets.deref(o, assets.tt(o)["_talkOptionFlag"])
+        for ptr in assets.tt(coll)["_list"] if coll else []:
+            out.add(flags[assets.key(coll, ptr)])
     # 不在 FLAG_READERS 的物件，只要用 PPtr 直接指到 FlagData,就當它會寫
     # (FlagModifyStat、CombatResultFlag、FacilityModifyItem、ProgressLevelData、FateBonusFlag ...)
+    out |= {flags[k] for k in pointed(assets, flags, FLAG_READERS)}
+    return out
+
+
+def system_written_relationships(assets):
+    """Lua 以外會改好感的角色：RelationshipStat 名字 -> RelationshipStatType 值。"""
+    rels = {(o.assets_file.name, o.path_id): o for o in assets.by_cls["RelationshipStat"]}
+    out = {assets.tt(rels[k])["m_Name"]: assets.tt(rels[k])["_type"] for k in pointed(assets, rels, RELATIONSHIP_READERS)}
+    out.update({assets.tt(o)["m_Name"]: t for o in rels.values() if (t := assets.tt(o)["_type"]) in CODE_WRITTEN_RELATIONSHIPS})
+    return out
+
+
+def pointed(assets, targets, readers):
+    """targets 裡被 readers 以外的物件用 PPtr 直接指到的。"""
+    out = set()
     for k, obj in assets.objs.items():
-        if assets.cls[k] in FLAG_READERS:
+        if assets.cls[k] in readers or k in targets:
             continue
         raw = obj.get_raw_data()
         ext = [os.path.basename(e.path) for e in obj.assets_file.externals]
@@ -128,8 +159,8 @@ def written_flags(assets, scripts):
             fid, pid = struct.unpack_from("<iq", raw, i)
             if 0 <= fid <= len(ext) and pid:
                 f = obj.assets_file.name if fid == 0 else ext[fid - 1]
-                if (f, pid) in flags:
-                    out.add(flags[(f, pid)])
+                if (f, pid) in targets:
+                    out.add((f, pid))
     return out
 
 
@@ -417,13 +448,10 @@ def write_system_flags(game, path):
     """插件執行時只看得到 Lua 的 SetFlag/AddFlag;Lua 以外(戰鬥、商店、設施…)寫入的旗標由這裡產生清單。
     兩邊都沒有的旗標 = 現版本拿不到，插件不提示。遊戲更新後重跑。"""
     assets = Assets(game)
-    scripts = load_scripts(game)
-    lua = set()
-    for t in scripts.values():
-        lua |= {s.lower() for s in FLAG_WRITE_RE.findall(t)}
     names = sorted({assets.tt(o)["m_Name"] for o in assets.by_cls["FlagData"]})
-    written = written_flags(assets, scripts)
-    system = [n for n in names if n.lower() in written and n.lower() not in lua]
+    written = system_written_flags(assets)
+    system = [n for n in names if n.lower() in written]
+    rels = sorted(system_written_relationships(assets).items(), key=lambda x: x[1])
     with open(path, "w", encoding="utf-8") as f:
         f.write("// 由 known_unknown.py --system-flags 產生，別手改。遊戲更新後重跑。\n")
         f.write("namespace KnownUnknown\n{\n    internal static class SystemFlags\n    {\n")
@@ -431,8 +459,13 @@ def write_system_flags(game, path):
         f.write("        public static readonly string[] Names =\n        {\n")
         for n in system:
             f.write(f'            "{n}",\n')
+        f.write("        };\n\n")
+        f.write("        // Lua 以外(新一輪繼承、商店、戰鬥…)會改好感的角色(RelationshipStatType)\n")
+        f.write("        public static readonly int[] Relationships =\n        {\n")
+        for n, t in rels:
+            f.write(f"            {t},  // {n}\n")
         f.write("        };\n    }\n}\n")
-    print(f"{len(system)} 個旗標 → {path}")
+    print(f"{len(system)} 個旗標、{len(rels)} 個角色 → {path}")
 
 
 # 地點事件表在劇情場景(Story)的資產裡，地圖上沒載入。抽出事件表和它引用的同檔物件，插件在地圖上照原樣重建；
