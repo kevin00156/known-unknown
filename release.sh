@@ -25,7 +25,19 @@ mkdir -p "$OUT/stage/BepInEx/plugins/KnownUnknown" "$OUT/stage/BepInEx/patchers/
 cp plugin/bin/out/KnownUnknown.dll LICENSE "$OUT/stage/BepInEx/plugins/KnownUnknown/"
 # 自動更新：下次啟動在插件載入前換上下載好的新版
 cp updater/bin/out/KnownUnknown.Updater.dll "$OUT/stage/BepInEx/patchers/KnownUnknown/"
-(cd "$OUT/stage" && zip -qr "$ZIP" BepInEx)
+# 附上 BepInEx 6，玩家解壓到遊戲資料夾就能用。換版本要一起改 sha256
+BEPINEX=BepInEx-Unity.Mono-win-x64-6.0.0-be.789+6cea286.zip
+BEPINEX_SHA256=e7ab96aa80f77119335fca0e99e978460d422f4a76befb4deb9c2d36380614d0
+CACHE=$PWD/plugin/bin/cache/$BEPINEX
+[ -f "$CACHE" ] || { mkdir -p "$(dirname "$CACHE")"; curl -fsSLo "$CACHE" "https://builds.bepinex.dev/projects/bepinex_be/789/${BEPINEX//+/%2B}"; }
+echo "$BEPINEX_SHA256  $CACHE" | sha256sum -c --quiet
+unzip -q "$CACHE" -x changelog.txt -d "$OUT/stage"
+cat > "$OUT/stage/BepInEx/plugins/KnownUnknown/THIRD-PARTY-NOTICES.txt" <<'EOF'
+BepInEx 6.0.0-be.789 (BepInEx/core, winhttp.dll, doorstop_config.ini)
+https://github.com/BepInEx/BepInEx
+Licensed under LGPL-2.1: https://github.com/BepInEx/BepInEx/blob/master/LICENSE
+EOF
+(cd "$OUT/stage" && zip -qr "$ZIP" .)
 
 git push origin HEAD
 if [ $# -gt 0 ]; then

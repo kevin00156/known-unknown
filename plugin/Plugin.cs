@@ -19,7 +19,7 @@ using UnityEngine.UI;
 
 namespace KnownUnknown
 {
-    [BepInPlugin("known-unknown", "多玩10塊錢", "0.14.0")]
+    [BepInPlugin("known-unknown", "多玩10塊錢", "0.14.1")]
     public class Plugin : BaseUnityPlugin
     {
         private static Plugin _instance;
