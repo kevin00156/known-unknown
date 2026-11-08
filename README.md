@@ -5,7 +5,7 @@
 
 ## 安裝
 
-1. 到 [Releases](https://github.com/kevin00156/known-unknown/releases) 下載最新的 `KnownUnknown-x.y.z.zip`。
+1. [下載最新版](https://github.com/kevin00156/known-unknown/releases/latest/download/KnownUnknown.zip)(或到 [Releases](https://github.com/kevin00156/known-unknown/releases) 下載 `KnownUnknown-x.y.z.zip`,內容一樣)。
 2. 解壓到遊戲資料夾(有 `Mortal.exe` 的那層；Steam 收藏庫對遊戲按右鍵 → 管理 → 瀏覽本機檔案)，有重複的檔案就覆蓋。
 3. 進遊戲按 F2。
 

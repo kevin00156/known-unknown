@@ -38,10 +38,13 @@ https://github.com/BepInEx/BepInEx
 Licensed under LGPL-2.1: https://github.com/BepInEx/BepInEx/blob/master/LICENSE
 EOF
 (cd "$OUT/stage" && zip -qr "$ZIP" .)
+# 固定檔名的複本給 releases/latest/download/KnownUnknown.zip 用(巴哈等處的連結)。不是 KnownUnknown- 開頭，自動更新不會挑到它
+LATEST=$OUT/KnownUnknown.zip
+cp "$ZIP" "$LATEST"
 
 git push origin HEAD
 if [ $# -gt 0 ]; then
-  gh release create "v$VER" "$ZIP" --target "$(git rev-parse HEAD)" --title "$VER" --notes-file "$1"
+  gh release create "v$VER" "$ZIP" "$LATEST" --target "$(git rev-parse HEAD)" --title "$VER" --notes-file "$1"
 else
-  gh release create "v$VER" "$ZIP" --target "$(git rev-parse HEAD)" --title "$VER" --generate-notes
+  gh release create "v$VER" "$ZIP" "$LATEST" --target "$(git rev-parse HEAD)" --title "$VER" --generate-notes
 fi
