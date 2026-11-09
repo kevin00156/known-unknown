@@ -193,9 +193,10 @@ namespace KnownUnknown
         }
 
         // 同 Walk 但不過濾，每一項附上「從 start 走到它」沿途所有的分支條件(跳轉所在分支 + 自己所在分支)
-        public IEnumerable<KeyValuePair<Item, Guard[]>> Paths(string start)
+        // back:走到這個劇本就停(選項劇情演完跳回選單)
+        public IEnumerable<KeyValuePair<Item, Guard[]>> Paths(string start, string back = null)
         {
-            HashSet<string> seen = new HashSet<string> { start };
+            HashSet<string> seen = new HashSet<string> { start, back };
             Queue<KeyValuePair<string, Guard[]>> queue = new Queue<KeyValuePair<string, Guard[]>>();
             queue.Enqueue(new KeyValuePair<string, Guard[]>(start, new Guard[0]));
             while (queue.Count > 0)
@@ -213,6 +214,22 @@ namespace KnownUnknown
                 }
             }
         }
+
+        // 選單劇本 menu 裡，選了 option 會演的項目(在這個選項分支裡的)。null = 不認得這個選項
+        public Item[] OptionItems(string menu, string option)
+        {
+            Script s = Get(menu);
+            if (s == null || !s.Options.TryGetValue(option.TrimStart('~'), out KeyValuePair<string, int> pick))
+                return null;
+            return s.Items.Where(i => i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == pick.Key && g.Value == pick.Value)).ToArray();
+        }
+
+        // 選項分支裡的跳轉 jump 之後會演的，沿途條件接在 jump 自己的條件後面。
+        // 演完跳回選單(問完話回到選單)就停：不然整個選單的其他選項都算進這個選項，其他選項自己有提示
+        public IEnumerable<KeyValuePair<Item, Guard[]>> Follow(Item jump, string menu) =>
+            jump.Value == menu
+                ? Enumerable.Empty<KeyValuePair<Item, Guard[]>>()
+                : Paths(jump.Value, menu).Select(x => new KeyValuePair<Item, Guard[]>(x.Key, jump.Guards.Concat(x.Value).ToArray()));
 
         public IEnumerable<string> Keys(string start, Func<Guard[], bool> ok) =>
             Walk(start, ok).Where(i => Seeable(i.Kind)).Select(i => i.Value).Distinct();

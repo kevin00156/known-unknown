@@ -12,6 +12,7 @@ grep -q "\"known-unknown\", \"多玩10塊錢\", \"$VER\"" plugin/Plugin.cs || { 
 uv run python known_unknown.py --game "$GAME/Mortal_Data" --system-flags plugin/SystemFlags.cs
 uv run python known_unknown.py --game "$GAME/Mortal_Data" --position-tables plugin/PositionTables.txt
 [ -z "$(git status --porcelain)" ] || { git status --short; echo "遊戲資料跟 repo 裡的不同(遊戲更新了?),看過、在遊戲裡測過再 commit" >&2; exit 1; }
+GAME="$GAME" tests/run.sh
 
 for p in plugin updater; do
   docker run --rm -v "$PWD/$p":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \

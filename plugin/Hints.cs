@@ -372,21 +372,20 @@ namespace KnownUnknown
         {
             _cond.Forget();
             EnsureLabels();
-            Script s = _index.Get(script);
-            if (s == null || !s.Options.TryGetValue(option.TrimStart('~'), out KeyValuePair<string, int> pick))
+            Item[] items = _index.OptionItems(script, option);
+            if (items == null)
                 return null;
             OptionHint hint = new OptionHint();
             List<string> parts = new List<string>();
             // 只看這個選項的分支：這個劇本裡直接出現的台詞算一段，每個跳轉出去的劇本各算一段
             List<KeyValuePair<Item, Guard[]>> inline = new List<KeyValuePair<Item, Guard[]>>();
             List<Outlook> looks = new List<Outlook>();
-            foreach (Item i in s.Items.Where(i => i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == pick.Key && g.Value == pick.Value)))
+            foreach (Item i in items)
             {
                 if (StoryIndex.Seeable(i.Kind) || i.Kind == ItemKind.Flag)
                     inline.Add(new KeyValuePair<Item, Guard[]>(i, i.Guards));
                 else if (i.Kind == ItemKind.Script)
-                    looks.Add(Look(_index.Paths(i.Value).Select(x =>
-                        new KeyValuePair<Item, Guard[]>(x.Key, i.Guards.Concat(x.Value).ToArray()))));
+                    looks.Add(Look(_index.Follow(i, script)));
                 else if (_results.TryGetValue(i.Value, out PositionResultData pr) && !i.Guards.Any(g => Blocks(g, NoFlags)))
                 {
                     Roll r = RollOf(pr);

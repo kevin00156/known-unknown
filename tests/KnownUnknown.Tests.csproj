@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
+    <!-- 遊戲 DLL 只拿來編譯 StoryIndex.cs;測試只跑劇本解析(純字串處理),不碰 Unity -->
+    <GamePath Condition="'$(GamePath)' == ''">$(HOME)/.steam/debian-installation/steamapps/common/LegendOfMortal</GamePath>
+    <Managed>$(GamePath)/Mortal_Data/Managed</Managed>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../plugin/StoryIndex.cs" Link="StoryIndex.cs" />
+    <Compile Include="../plugin/SystemFlags.cs" Link="SystemFlags.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.697" IncludeAssets="compile" />
+    <PackageReference Include="UnityEngine.Modules" Version="2020.3.49" IncludeAssets="compile" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="$(Managed)/Mortal.Core.dll" Private="false" />
+    <Reference Include="$(Managed)/LeanLocalization.dll" Private="false" />
+  </ItemGroup>
+</Project>

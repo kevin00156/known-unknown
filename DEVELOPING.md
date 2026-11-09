@@ -84,6 +84,10 @@ cp bin/out/KnownUnknown.dll "$GAME/BepInEx/plugins/KnownUnknown/"
 下載用 `HttpWebRequest`:`UnityWebRequest` 在 Wine 下從 `release-assets.githubusercontent.com` 下載會收完資料卻一直不結束；
 `JsonUtility` 在插件組件裡填不進自訂類別的陣列，JSON 改用 `DataContractJsonSerializer`。
 
+自動化測試：`tests/run.sh`(`release.sh` 發版前也會跑)。用 `known_unknown.py --dump-scripts` 匯出目前安裝的遊戲劇本，
+在 docker 裡 `dotnet test`,測劇本解析(`StoryIndex`，純字串處理，不用開遊戲)。例如：遊戲裡每個選單的每個選項，
+算到的台詞不能有同一個選單別的選項分支裡的(選項演完跳回選單時，不能把整個選單又算一次)。
+
 開發用遙控插件(`dev/`,不隨 mod 發佈)：讀 `BepInEx/ku-cmd.txt` 的指令在遊戲內點 UI、透過 DiceMaster 指定地點事件、
 指定骰子點數、比對已讀台詞(`snap`/`diff`)，不用搶滑鼠鍵盤焦點就能自動測試。指令見 `dev/Remote.cs` 開頭。
 
