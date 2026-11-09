@@ -65,6 +65,17 @@ namespace KnownUnknown
             { StatCompareType.GreaterEqual, "≥" },
         };
 
+        // 比較不成立 = 反向比較成立
+        private static readonly Dictionary<StatCompareType, StatCompareType> Negate = new Dictionary<StatCompareType, StatCompareType>
+        {
+            { StatCompareType.Equal, StatCompareType.NotEqual },
+            { StatCompareType.NotEqual, StatCompareType.Equal },
+            { StatCompareType.Less, StatCompareType.GreaterEqual },
+            { StatCompareType.LessEqual, StatCompareType.Greater },
+            { StatCompareType.Greater, StatCompareType.LessEqual },
+            { StatCompareType.GreaterEqual, StatCompareType.Less },
+        };
+
         // 變數名 → 畫面用字：「好感度_小師妹」→「小師妹好感」
         private static readonly KeyValuePair<string, string>[] Prefixes =
         {
@@ -445,29 +456,32 @@ namespace KnownUnknown
             List<ConditionResultItem> items = SwitchItems(s);
             if (g.Value >= 1 && g.Value <= items.Count)
                 return Describe(items[g.Value - 1], flagSource);
-            // 最後一個分支：前面全部不成立
-            return "以下都不成立：" + string.Join("；", items.Select(i => Describe(i, flagSource, true)));
+            // 最後一個分支：前面每個分支都不成立。已經不成立的不用列(全都不成立就全列，至少說得出要什麼)
+            List<ConditionResultItem> holding = items.Where(Eval).ToList();
+            return string.Join("；", (holding.Count > 0 ? holding : items).Select(i => Describe(i, flagSource, true)));
         }
 
-        // against:要的是這個條件不成立(取得處就找能讓比較不成立的值)
+        // against:要的是這個條件不成立。照 De Morgan 寫成反向條件：比較反過來、且/或對調
         public string Describe(ConditionResultItem c, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against = false)
         {
-            // 「且」只列還沒成立的；「或」全部列出(任一個成立就好)
+            // 「且」只列還沒達成的；「或」全部列出(任一個達成就好)。against 時比較成立 = 還沒達成
             List<StatCompareItem> xs = Compares(c);
-            bool and = LogicOp(c) == LogicOperatorType.AND;
-            if (and && xs.Any(x => !Compare(x)))
-                xs = xs.Where(x => !Compare(x)).ToList();
+            bool and = (LogicOp(c) == LogicOperatorType.AND) != against;
+            if (and && xs.Any(x => Compare(x) == against))
+                xs = xs.Where(x => Compare(x) == against).ToList();
             return string.Join(and ? " 且 " : " 或 ", xs.Select(x => Describe(x, flagSource, against)));
         }
 
         private string Describe(StatCompareItem x, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against)
         {
             StatGroupVariable a = Value1(x), b = Value2(x);
+            StatCompareType op = against ? Negate[CompareOp(x)] : CompareOp(x);
             // 現在時間 vs 劇情用 SetMissionTime 記下的時間點：日期由劇情決定，寫日期反而誤導
             if (IsTime(a) && IsTime(b))
-                return CompareOp(x) == StatCompareType.Equal ? "到了劇情安排的那一旬" : $"時間 {Ops[CompareOp(x)]} 劇情安排的時間";
+                return op == StatCompareType.Equal ? "到了劇情安排的那一旬"
+                    : op == StatCompareType.NotEqual ? "不在劇情安排的那一旬" : $"時間 {Ops[op]} 劇情安排的時間";
             string now = Constant(a) ? "" : $"(目前 {Show(a, Value(a))})";
-            string text = $"{Name(a)} {Ops[CompareOp(x)]} {Show(a, Value(b))}{now}";
+            string text = $"{Name(a)} {Ops[op]} {Show(a, Value(b))}{now}";
             // 取得處只對「一個旗標」比較；數值群組(旗標_攻略人數 = 幾個攻略旗標的和)拿其中一個的取得處會誤導
             List<StatValueReference> refs = a == null ? new List<StatValueReference>() : Refs(a);
             FlagData f = refs.Count == 1 && refs[0].CheckType == StatCheckType.旗標 ? FlagOf(refs[0]) : null;
