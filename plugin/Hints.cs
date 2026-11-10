@@ -343,6 +343,13 @@ namespace KnownUnknown
             return roll;
         }
 
+        // 這張事件表現在抽不抽得到這個結果代碼
+        public bool CanRoll(PositionResultData pr, string type)
+        {
+            _cond.Forget();
+            return Events(pr).Any(x => x.Key.ResultType == type);
+        }
+
         private List<KeyValuePair<PositionEventData, int>> Events(PositionResultData pr)
         {
             HashSet<string> types = new HashSet<string>();

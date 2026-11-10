@@ -189,6 +189,7 @@ namespace KnownUnknown
                 && m.GetParameters()[2].ParameterType.Name == "LuaEnvironment");
             _harmony = new Harmony("known-unknown");
             _harmony.Patch(addOption, postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterAddOption)));
+            Force.CanRoll = (table, type) => _hints == null || _hints.CanRoll(table, type);
             Force.Patch(_harmony);
             Dice.Patch(_harmony);
             MenuSignals.OnMenuStart += OnMenuStart;
