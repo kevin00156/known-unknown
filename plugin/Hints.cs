@@ -381,7 +381,7 @@ namespace KnownUnknown
         {
             _cond.Forget();
             EnsureLabels();
-            Item[] items = _index.OptionItems(script, option);
+            Item[] items = _index.OptionItems(script, option, outer => !outer.Any(g => Blocks(g, NoFlags)));
             if (items == null)
                 return null;
             OptionHint hint = new OptionHint();

@@ -20,7 +20,7 @@ namespace KnownUnknown
     internal struct Guard : IEquatable<Guard>
     {
         public GuardKind Kind;
-        public string Name;   // Switch 名或 choice 變數名
+        public string Name;   // Switch 名；Choice:這份劇本裡第幾個選單(「變數名#n」,同一個變數名會重複用)
         public int Value;
         public string Gate;   // Choice:這個選項要 checkpointmanager.Condition(Gate) 成立才會出現在選單上
 
@@ -49,12 +49,20 @@ namespace KnownUnknown
         public bool Add;      // Flag:AddFlag,或設成非常數(SetFlag("F", var1)):值不固定
     }
 
+    // 某個選單的第幾個選項
+    internal struct Pick
+    {
+        public string Menu;     // = Guard.Name
+        public int Index;
+        public Guard[] Outer;   // 選單自己所在的分支
+    }
+
     // 一份劇本解析後的樣子
     internal class Script
     {
         public Item[] Items;
-        // 選項字串 -> (choice 變數, 第幾個)
-        public Dictionary<string, KeyValuePair<string, int>> Options = new Dictionary<string, KeyValuePair<string, int>>();
+        // 選項字串 -> 哪個選單的第幾個。同一個字串可能出現在好幾個選單(不同分支各擺一個一樣的選單)
+        public Dictionary<string, List<Pick>> Options = new Dictionary<string, List<Pick>>();
         public string[] Cast;
         // 角色代號(girl5、special1)-> 這份劇本最多加多少好感(每個加好感的呼叫都算一次，不管在哪個分支)
         public Dictionary<string, int> Gains = new Dictionary<string, int>();
@@ -233,12 +241,16 @@ namespace KnownUnknown
         }
 
         // 選單劇本 menu 裡，選了 option 會演的項目(在這個選項分支裡的)。null = 不認得這個選項
-        public Item[] OptionItems(string menu, string option)
+        // live:選單所在的分支現在走不走得到。同一個選項字串有好幾個選單時用它挑；分不出來就全算
+        public Item[] OptionItems(string menu, string option, Func<Guard[], bool> live = null)
         {
             Script s = Get(menu);
-            if (s == null || !s.Options.TryGetValue(option.TrimStart('~'), out KeyValuePair<string, int> pick))
+            if (s == null || !s.Options.TryGetValue(option.TrimStart('~'), out List<Pick> picks))
                 return null;
-            return s.Items.Where(i => i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == pick.Key && g.Value == pick.Value)).ToArray();
+            List<Pick> on = live == null ? picks : picks.Where(p => live(p.Outer)).ToList();
+            if (on.Count == 0)
+                on = picks;
+            return s.Items.Where(i => i.Guards.Any(g => g.Kind == GuardKind.Choice && on.Any(p => p.Menu == g.Name && p.Index == g.Value))).ToArray();
         }
 
         // 選項分支裡的跳轉 jump 之後會演的，沿途條件接在 jump 自己的條件後面。
@@ -276,8 +288,8 @@ namespace KnownUnknown
             {
                 foreach (Guard g in i.Guards.Where(g => g.Kind == GuardKind.Choice))
                 {
-                    KeyValuePair<string, KeyValuePair<string, int>> o = s.Options.FirstOrDefault(x =>
-                        x.Value.Key == g.Name && x.Value.Value == g.Value);
+                    KeyValuePair<string, List<Pick>> o = s.Options.FirstOrDefault(x =>
+                        x.Value.Any(p => p.Menu == g.Name && p.Index == g.Value));
                     // 擲骰的選項(「O_xxx|>=60」)不是玩家選的行動
                     if (o.Key != null && !o.Key.Contains('|') && !_actions.ContainsKey(i.Value))
                         _actions[i.Value] = o.Key;
@@ -296,7 +308,7 @@ namespace KnownUnknown
             List<Item> items = new List<Item>();
             Dictionary<string, Guard> vars = new Dictionary<string, Guard>();
             Dictionary<string, Dictionary<int, string>> arrays = new Dictionary<string, Dictionary<int, string>>();
-            Dictionary<string, string> chooses = new Dictionary<string, string>();   // choice 變數 -> 陣列
+            Dictionary<string, string> chooses = new Dictionary<string, string>();   // 選單(Guard.Name) -> 陣列
             Dictionary<string, string> conds = new Dictionary<string, string>();     // 變數 -> Condition 名
             Dictionary<string, string> gates = new Dictionary<string, string>();     // "陣列[第幾個]" -> Condition 名
             string roll = null;                                                       // 最近一次 ExecuteRoll 的選項陣列
@@ -349,14 +361,15 @@ namespace KnownUnknown
                     if (rhs.StartsWith("checkpointmanager.Switch(\""))
                         vars[name] = new Guard { Kind = GuardKind.Switch, Name = Arg(rhs, 0) };
                     else if (rhs.StartsWith("choose("))
-                    {
-                        vars[name] = new Guard { Kind = GuardKind.Choice, Name = name };
-                        chooses[name] = rhs.Substring(7, rhs.IndexOf(')') - 7);
-                    }
+                        vars[name] = Menu(script, name, rhs.Substring(7, rhs.IndexOf(')') - 7), arrays, chooses, guards);
                     else if (rhs == "dicemenudialog.ResultSelection" && roll != null)
+                        vars[name] = Menu(script, name, roll, arrays, chooses, guards);
+                    else if (rhs == "{}")
                     {
-                        vars[name] = new Guard { Kind = GuardKind.Choice, Name = name };
-                        chooses[name] = roll;
+                        // 陣列重新宣告：上一個選單的選項、條件不能留到下一個
+                        arrays.Remove(name);
+                        foreach (string g in gates.Keys.Where(k => k.StartsWith(name + "[")).ToList())
+                            gates.Remove(g);
                     }
                     else if (rhs.StartsWith("checkpointmanager.Condition(\""))
                         conds[name] = Arg(rhs, 0);
@@ -402,15 +415,28 @@ namespace KnownUnknown
                     Collect(l, t, ItemKind.Script, guards, items);
             }
 
-            foreach (KeyValuePair<string, string> c in chooses)
-            {
-                if (!arrays.TryGetValue(c.Value, out Dictionary<int, string> arr))
-                    continue;
-                foreach (KeyValuePair<int, string> o in arr)
-                    script.Options[o.Value.TrimStart('~')] = new KeyValuePair<string, int>(c.Key, o.Key);
-            }
             script.Items = items.ToArray();
             return script;
+        }
+
+        // 一個選單(choose 或擲骰)：給它這份劇本裡唯一的名字，選項照陣列「現在」的內容記下。
+        // 變數名、陣列名都會重複用(s0003_01_02 的 choice_option1_3 出現兩次),不能等整份讀完才對
+        private static Guard Menu(Script script, string variable, string array, Dictionary<string, Dictionary<int, string>> arrays,
+            Dictionary<string, string> chooses, Guard[] outer)
+        {
+            string id = $"{variable}#{chooses.Count + 1}";
+            chooses[id] = array;
+            if (arrays.TryGetValue(array, out Dictionary<int, string> arr))
+            {
+                foreach (KeyValuePair<int, string> o in arr)
+                {
+                    string text = o.Value.TrimStart('~');
+                    if (!script.Options.TryGetValue(text, out List<Pick> picks))
+                        script.Options[text] = picks = new List<Pick>();
+                    picks.Add(new Pick { Menu = id, Index = o.Key, Outer = outer });
+                }
+            }
+            return new Guard { Kind = GuardKind.Choice, Name = id };
         }
 
         // 一行裡 call( 之後第一個字串參數(SetTempScript(1, "x") 的 x 也算)

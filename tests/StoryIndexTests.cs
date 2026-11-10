@@ -93,6 +93,62 @@ luamanager.SetNextScript(""entry"")
             Assert.Contains("", Ways(index, "entry", "T1"));
         }
 
+        // 同一個變數名、陣列名用兩次(s0003_01_02):兩個選單要分開，第一個選單的選項不能對到第二個的分支
+        private const string ReusedNames = @"local opt = {}
+opt[1] = ""O_A""
+opt[2] = ""O_B""
+local choice_opt = choose(opt)
+if choice_opt == 1 then
+	say(luamanager.GetStoryText(""A1""))
+elseif choice_opt == 2 then
+	say(luamanager.GetStoryText(""B1""))
+end
+local opt = {}
+opt[1] = ""O_C""
+local choice_opt = choose(opt)
+if choice_opt == 1 then
+	say(luamanager.GetStoryText(""C1""))
+end
+";
+
+        [Fact]
+        public void ReusedMenuNamesStaySeparate()
+        {
+            StoryIndex index = Index(("menu", ReusedNames));
+            Assert.Equal(new[] { "A1" }, Keys(index, "menu", "O_A"));
+            Assert.Equal(new[] { "B1" }, Keys(index, "menu", "O_B"));
+            Assert.Equal(new[] { "C1" }, Keys(index, "menu", "O_C"));
+        }
+
+        // 兩個分支各擺一個選單，選項字串一樣(s0020_02_04):照選單所在的分支挑
+        private const string SameText = @"local r = checkpointmanager.Switch(""S"")
+if r == 1 then
+	local one = {}
+	one[1] = ""O_X""
+	local choice_one = choose(one)
+	if choice_one == 1 then
+		say(luamanager.GetStoryText(""X1""))
+	end
+elseif r == 2 then
+	local two = {}
+	two[1] = ""O_X""
+	local choice_two = choose(two)
+	if choice_two == 1 then
+		say(luamanager.GetStoryText(""X2""))
+	end
+end
+";
+
+        [Fact]
+        public void SameOptionTextInTwoMenus()
+        {
+            StoryIndex index = Index(("menu", SameText));
+            Func<int, Func<Guard[], bool>> branch = n => outer => outer.All(g => g.Value == n);
+            Assert.Equal(new[] { "X1" }, index.OptionItems("menu", "O_X", branch(1)).Select(i => i.Value));
+            Assert.Equal(new[] { "X2" }, index.OptionItems("menu", "O_X", branch(2)).Select(i => i.Value));
+            Assert.Equal(new[] { "X1", "X2" }, index.OptionItems("menu", "O_X").Select(i => i.Value));
+        }
+
         // 遊戲裡全部的劇本：多記幾條路不能讓結果爆量(迴圈、層層會合)
         [Fact]
         public void PathsStayBounded()
@@ -143,13 +199,16 @@ luamanager.SetNextScript(""entry"")
                 if (script.Options.Count == 0)
                     continue;
                 menus++;
-                foreach (KeyValuePair<string, KeyValuePair<string, int>> o in script.Options)
+                foreach (KeyValuePair<string, Pick> o in script.Options.SelectMany(x => x.Value.Select(p => new KeyValuePair<string, Pick>(x.Key, p))))
                 {
+                    // 同一個字串在好幾個選單裡的，另外由 SameOptionTextInTwoMenus 測
+                    if (script.Options[o.Key].Count > 1)
+                        continue;
                     // 只在別的選項分支、不在這個選項分支裡的台詞
-                    Func<Item, bool> mine = i => i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == o.Value.Key && g.Value == o.Value.Value);
+                    Func<Item, bool> mine = i => i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == o.Value.Menu && g.Value == o.Value.Index);
                     HashSet<string> others = new HashSet<string>(script.Items
                         .Where(i => i.Kind == ItemKind.Key && !mine(i)
-                            && i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == o.Value.Key))
+                            && i.Guards.Any(g => g.Kind == GuardKind.Choice && g.Name == o.Value.Menu))
                         .Select(i => i.Value));
                     others.ExceptWith(script.Items.Where(i => i.Kind == ItemKind.Key && mine(i)).Select(i => i.Value));
                     int leaked = Keys(index, s.Key, o.Key).Count(others.Contains);
