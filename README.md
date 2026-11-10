@@ -9,6 +9,8 @@
 2. 解壓到遊戲資料夾(有 `Mortal.exe` 的那層；Steam 收藏庫對遊戲按右鍵 → 管理 → 瀏覽本機檔案)，有重複的檔案就覆蓋。
 3. 進遊戲按 F2。
 
+Steam Deck 沒有 F2：在 Steam 的控制器設定把一顆背鍵綁成鍵盤的 F2 就能用。
+
 - zip 已經附了 BepInEx 6，不用另外裝。原本裝 BepInEx 5 的 mod 會失效。
 - Steam Deck / Linux：遊戲的啟動選項加上 `WINEDLLOVERRIDES="winhttp=n,b" %command%`。
 - 之後會自動更新。移除：刪掉 `BepInEx/plugins/KnownUnknown` 和 `BepInEx/patchers/KnownUnknown`。
@@ -17,7 +19,7 @@
 ## 顏色
 
 - 白色：現在去就看得到
-- 土黃：角色條件還不夠，旁邊寫需要什麼、去哪拿
+- 土黃：角色條件還不夠，旁邊寫需要什麼、去哪拿。每個條件已達成的是綠色，還沒達成的是紅色
 - 灰色：現版本拿不到(要勾「也顯示現版本未開放的劇情」才會列，會劇透)
 
 ## 設定
