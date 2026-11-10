@@ -18,6 +18,7 @@ namespace KnownUnknown
         public static int Target;          // 指定的結果(1 起算);0 = 不指定
         private static DiceMenuDialog _dialog;
         private static string _check;     // DiceResultData 名
+        private static DiceResultData _data;   // _check 對到的那一份；每次擲骰查一次(視窗每畫一次就掃全部物件會卡)
 
         private static readonly AccessTools.FieldRef<DiceMenuDialog, int> DiceMin = AccessTools.FieldRefAccess<DiceMenuDialog, int>("_diceMin");
         private static readonly AccessTools.FieldRef<DiceMenuDialog, int> DiceMax = AccessTools.FieldRefAccess<DiceMenuDialog, int>("_diceMax");
@@ -42,6 +43,7 @@ namespace KnownUnknown
         {
             _dialog = __instance;
             _check = checkName;
+            _data = null;
             Options = options;
             Target = 0;
         }
@@ -75,8 +77,12 @@ namespace KnownUnknown
             return items.Count + 1;
         }
 
-        private static DiceResultData Data() =>
-            Resources.FindObjectsOfTypeAll<DiceResultData>().FirstOrDefault(x => x.name == _check);
+        private static DiceResultData Data()
+        {
+            if (_data == null)
+                _data = Resources.FindObjectsOfTypeAll<DiceResultData>().FirstOrDefault(x => x.name == _check);
+            return _data;
+        }
 
         // 再按一次同一個 = 取消
         public static void Toggle(int k) => Target = Target == k ? 0 : k;
@@ -86,6 +92,18 @@ namespace KnownUnknown
         {
             if (!Enabled || Target == 0 || !Active || name != _check)
                 return;
+            try
+            {
+                Pick(name, ref random);
+            }
+            catch (Exception e)
+            {
+                Log($"[指定] 擲骰 {name} 沒套用：{e}");   // 不能丟回遊戲的擲骰
+            }
+        }
+
+        private static void Pick(string name, ref int random)
+        {
             DiceResultData d = Data();
             if (d == null)
                 return;

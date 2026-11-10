@@ -40,7 +40,10 @@ namespace KnownUnknown
             if (!Enabled || !Targets.TryGetValue(__instance.name, out Outcome o))
                 return;
             Targets.Remove(__instance.name);
-            string forced = Traverse.Create(__instance).Field("_scriptPrefix").GetValue<string>() + "_" + o.Type;
+            string prefix = Traverse.Create(__instance).Field("_scriptPrefix").GetValue<string>();
+            if (prefix == null)
+                return;   // 讀不到前綴：照遊戲抽的，不要給它一個不存在的劇本名
+            string forced = prefix + "_" + o.Type;
             Log($"[指定] {__instance.name}:{__result} → {forced}");
             __result = forced;
         }

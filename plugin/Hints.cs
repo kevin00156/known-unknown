@@ -654,28 +654,34 @@ namespace KnownUnknown
                 foreach (KeyValuePair<int, List<Outcome>> byValue in w.Value)
                 {
                     // 假設拿到這個旗標，重新判斷；只算光靠它就解鎖的
-                    _cond.Assume(new Dictionary<FlagData, int> { { w.Key, byValue.Key } });
                     Dictionary<string, HashSet<string>> unlocked = new Dictionary<string, HashSet<string>>();
-                    foreach (Gated g in blocked.Where(g => g.Flags.Contains(w.Key.name) && !g.Guards.Any(x => Blocks(x, g.InStory))))
-                    {
-                        if (!unlocked.TryGetValue(g.Root, out HashSet<string> keys))
-                            unlocked[g.Root] = keys = new HashSet<string>();
-                        keys.Add(g.Key);
-                    }
                     List<string> what = new List<string>();
-                    foreach (KeyValuePair<string, MissionCheckData> m in pending.Where(m => MissionReady(m.Value)))
+                    _cond.Assume(new Dictionary<FlagData, int> { { w.Key, byValue.Key } });
+                    try
                     {
-                        string start = m.Value.StartScript.ToLowerInvariant();
-                        HashSet<string> keys = new HashSet<string>(_index.Keys(start, _ => true).Where(k => !Game.Seen(k)));
-                        if (keys.Count == 0)
-                            continue;
-                        unlocked[start] = keys;
-                        what.Add(m.Key);
+                        foreach (Gated g in blocked.Where(g => g.Flags.Contains(w.Key.name) && !g.Guards.Any(x => Blocks(x, g.InStory))))
+                        {
+                            if (!unlocked.TryGetValue(g.Root, out HashSet<string> keys))
+                                unlocked[g.Root] = keys = new HashSet<string>();
+                            keys.Add(g.Key);
+                        }
+                        foreach (KeyValuePair<string, MissionCheckData> m in pending.Where(m => MissionReady(m.Value)))
+                        {
+                            string start = m.Value.StartScript.ToLowerInvariant();
+                            HashSet<string> keys = new HashSet<string>(_index.Keys(start, _ => true).Where(k => !Game.Seen(k)));
+                            if (keys.Count == 0)
+                                continue;
+                            unlocked[start] = keys;
+                            what.Add(m.Key);
+                        }
+                        what.AddRange(unlocked.Keys.Where(r => !pending.Any(m => m.Value.StartScript.ToLowerInvariant() == r))
+                            .Select(r => _labels != null && _labels.TryGetValue(r, out string l) ? l
+                                : _index.Cast(r, 2).Length > 0 ? _index.Cast(r, 2) + "的劇情" : "其他劇情"));
                     }
-                    what.AddRange(unlocked.Keys.Where(r => !pending.Any(m => m.Value.StartScript.ToLowerInvariant() == r))
-                        .Select(r => _labels != null && _labels.TryGetValue(r, out string l) ? l
-                            : _index.Cast(r, 2).Length > 0 ? _index.Cast(r, 2) + "的劇情" : "其他劇情"));
-                    _cond.Assume(null);
+                    finally
+                    {
+                        _cond.Assume(null);   // 中途出錯也要收掉假設，不然之後的判斷全帶著它
+                    }
                     if (unlocked.Count == 0)
                         continue;
                     Tally count = unlocked.Values.Aggregate(new Tally(), (a, k) => a + Tally.Of(1, k));

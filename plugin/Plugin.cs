@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using BepInEx;
 using BepInEx.Configuration;
@@ -10,6 +11,7 @@ using Fungus;
 using HarmonyLib;
 using Mortal.Core;
 using Mortal.Free;
+using Mortal.Story;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using Mouse = UnityEngine.InputSystem.Mouse;
@@ -65,12 +67,91 @@ namespace KnownUnknown
         private GUIStyle _picked;
         private GUIStyle _check;
         private string _outdated;   // 遊戲改版、插件資料還沒跟上時的警告；null = 版本一致
+        private string _broken;     // 接不上這版遊戲：整個停用，視窗只顯示這一行；null = 正常
+        private volatile Exception _buildFailed;   // 背景建索引失敗
 
+        // 這裡只做不碰遊戲的事。遊戲改版讓下面 Hook() 接不上時，查新版照樣要跑，不然玩家卡在壞掉的版本
         private void Awake()
         {
             _instance = this;
             // F3 是 LegendOfMortalMod 的選單鍵。F2 左手按得到，右手不用離開滑鼠
             _toggleKey = Config.Bind("General", "ToggleKey", KeyCode.F2, "開關視窗(本旬去哪裡能看到白字；選單開著時也列出每個選項)");
+            _autoUpdate = Config.Bind("Update", "AutoUpdate", true,
+                "啟動遊戲時查 GitHub 有沒有新版，有就在背景下載，下次啟動遊戲時換上(要有 zip 裡的 BepInEx/patchers/KnownUnknown)。關掉就完全不連網");
+            _updateSource = Config.Bind("Update", "UpdateSource", "https://api.github.com/repos/kevin00156/known-unknown/releases/latest",
+                "查新版的網址(GitHub releases/latest API 格式)。通常不用改");
+            SelfUpdate.Log = m => Logger.LogInfo(m);
+            if (_autoUpdate.Value)
+                SelfUpdate.Start(_updateSource.Value);
+            try
+            {
+                Hook();
+            }
+            catch (Exception e)
+            {
+                Break(e);
+            }
+        }
+
+        // 接不上這版遊戲(欄位、方法改名了):整個停用，只報一次。F2 照樣開視窗，告訴玩家等更新
+        private void Break(Exception e)
+        {
+            if (_broken != null)
+                return;
+            _broken = $"插件和這版遊戲({Application.version})不合，已停用，等插件更新；有新版會自動下載，下次啟動遊戲換上。";
+            Logger.LogError(_broken);
+            Logger.LogError(e);
+            try
+            {
+                BlockGameMouse(false);
+                SceneManager.sceneLoaded -= OnSceneLoaded;
+                _harmony?.UnpatchSelf();
+                Unsubscribe();
+            }
+            catch (Exception)
+            {
+                // 連訊號都接不上：本來就沒掛上
+            }
+        }
+
+        private void Unsubscribe()
+        {
+            MenuSignals.OnMenuStart -= OnMenuStart;
+            MenuSignals.OnMenuEnd -= OnMenuEnd;
+        }
+
+        // 型別、欄位、方法對不上 = 遊戲改版了；其他例外是一般錯誤，不停用
+        private static bool Mismatch(Exception e) =>
+            e is TypeInitializationException || e is MissingMemberException || e is TypeLoadException;
+
+        private static KeyValuePair<Type, string> Want<T>(string field) => new KeyValuePair<Type, string>(typeof(T), field);
+
+        private void Hook()
+        {
+            // 用名字(Traverse)讀的遊戲內部欄位。Traverse 找不到欄位不會報錯、只會回預設值，所以啟動時先對一次
+            KeyValuePair<Type, string>[] wanted =
+            {
+                Want<PositionEventData>("_toggleCondition"), Want<PositionEventData>("_activeCondition"),
+                Want<PositionEventData>("_defaultRate"), Want<PositionEventData>("_eventRateItem"), Want<PositionEventData>("_config"),
+                Want<PositionResultData>("_scriptPrefix"),
+                Want<MissionManagerData>("_main"), Want<MissionManagerData>("_subMissions"),
+                Want<MissionData>("_missions"), Want<MissionData>("_desc"),
+                Want<MissionCheckData>("_active"), Want<MissionCheckData>("_dayCheck"), Want<MissionCheckData>("_timeCheckType"),
+                Want<MissionCheckData>("_specificTime"), Want<MissionCheckData>("_maxTime"),
+                Want<MissionCheckData>("_conditions"), Want<MissionCheckData>("_desc"),
+                Want<FreePositionData>("_disableCondition"), Want<FreePositionData>("_defaultScript"),
+                Want<ReadStorySystem>("_dicStoryIndex"),
+                Want<MenuDialog>("nextOptionIndex"),
+                Want<PositionController>("_positionData"),
+            };
+            foreach (KeyValuePair<Type, string> w in wanted)
+            {
+                if (AccessTools.Field(w.Key, w.Value) == null)   // 跟 Traverse 同一種找法(含父類別)
+                    throw new MissingFieldException(w.Key.Name, w.Value);
+            }
+            // 靜態欄位存取器在這裡一次接好，接不上就在這裡丟，不要等到算提示時每一幀丟
+            RuntimeHelpers.RunClassConstructor(typeof(Cond).TypeHandle);
+            RuntimeHelpers.RunClassConstructor(typeof(Dice).TypeHandle);
             _countUnit = Config.Bind("General", "CountUnit", CountUnit.Both,
                 "白字怎麼算：Events = 幾段劇情(還有白字的事件/結果),Lines = 幾句台詞,Both = 兩個都顯示");
             _showLocked = Config.Bind("General", "ShowLocked", false,
@@ -87,11 +168,7 @@ namespace KnownUnknown
                 "清單裡結果旁邊的勾選框 = 指定下次去那裡一定抽到它(取消勾選 = 取消);在地圖上勾會直接替你點地點、選行動。擲骰也一樣。會改變遊戲結果，不想要就關掉");
             Force.Enabled = Dice.Enabled = _allowForce.Value;
             _allowForce.SettingChanged += (_, __) => Force.Enabled = Dice.Enabled = _allowForce.Value;
-            _autoUpdate = Config.Bind("Update", "AutoUpdate", true,
-                "啟動遊戲時查 GitHub 有沒有新版，有就在背景下載，下次啟動遊戲時換上(要有 zip 裡的 BepInEx/patchers/KnownUnknown)。關掉就完全不連網");
-            _updateSource = Config.Bind("Update", "UpdateSource", "https://api.github.com/repos/kevin00156/known-unknown/releases/latest",
-                "查新版的網址(GitHub releases/latest API 格式)。通常不用改");
-            Force.Log = Dice.Log = Preload.Log = SelfUpdate.Log = m => Logger.LogInfo(m);
+            Force.Log = Dice.Log = Preload.Log = m => Logger.LogInfo(m);
             // SystemFlags(Lua 以外寫入的旗標/好感)是發版時從遊戲資料抽的，遊戲改版後可能少了新的寫入點
             Logger.LogInfo($"遊戲版本 {Application.version},插件資料 {SystemFlags.GameVersion}");
             if (Application.version != SystemFlags.GameVersion)
@@ -118,32 +195,49 @@ namespace KnownUnknown
             MenuSignals.OnMenuEnd += OnMenuEnd;
             SceneManager.sceneLoaded += OnSceneLoaded;
             Logger.LogInfo("多玩10塊錢 loaded");
-            if (_autoUpdate.Value)
-                SelfUpdate.Start(_updateSource.Value);
         }
 
         private void OnDestroy()
         {
+            if (_broken != null)
+                return;   // 停用時已經收過了
             BlockGameMouse(false);
-            MenuSignals.OnMenuStart -= OnMenuStart;
-            MenuSignals.OnMenuEnd -= OnMenuEnd;
             SceneManager.sceneLoaded -= OnSceneLoaded;
             _harmony?.UnpatchSelf();
+            Unsubscribe();
         }
 
         private void Update()
         {
-            // 讀完存檔就在背景先建索引，第一次跳出選單時就有資料可用
-            if (_building == null && Game.Ready())
-                StartBuild();
-            if (_hints == null && _index != null)
-                _hints = new Hints(_index);
-
             if (Input.GetKeyDown(_toggleKey.Value))
             {
                 _show = !_show;
                 _signature = null;
             }
+            if (_broken != null)
+                return;
+            try
+            {
+                Tick();
+            }
+            catch (Exception e) when (Mismatch(e))
+            {
+                Break(e);
+            }
+        }
+
+        private void Tick()
+        {
+            if (_buildFailed != null)
+            {
+                Break(_buildFailed);   // 劇本格式變了
+                return;
+            }
+            // 讀完存檔就在背景先建索引，第一次跳出選單時就有資料可用
+            if (_building == null && Game.Ready())
+                StartBuild();
+            if (_hints == null && _index != null)
+                _hints = new Hints(_index);
             bool over = MouseOverWindow();
             if (over || _muted.Count > 0 || _mouseOff)
                 BlockGameMouse(over);
@@ -174,7 +268,7 @@ namespace KnownUnknown
                 }
                 catch (Exception e)
                 {
-                    Logger.LogError(e);
+                    _buildFailed = e;
                 }
             })
             {
@@ -290,15 +384,28 @@ namespace KnownUnknown
             Plugin p = _instance;
             if (p == null || p._hints == null || !interactable || __instance != p._menu)
                 return;
-            if (p._goAction != null && text.TrimStart('~') == p._goAction.TrimStart('~'))
+            // 例外不能丟回遊戲的 choose():選項會加到一半，劇情卡住
+            try
             {
-                p._goButton = __instance.CachedButtons[Traverse.Create(__instance).Field("nextOptionIndex").GetValue<int>() - 1];
-                p._goAt = Time.unscaledTime + 0.6f;
-                p._goAction = null;
+                p.OnOption(__instance, text);
+            }
+            catch (Exception e)
+            {
+                p.Logger.LogError(e);
+            }
+        }
+
+        private void OnOption(MenuDialog menu, string text)
+        {
+            if (_goAction != null && text.TrimStart('~') == _goAction.TrimStart('~'))
+            {
+                _goButton = menu.CachedButtons[Traverse.Create(menu).Field("nextOptionIndex").GetValue<int>() - 1];
+                _goAt = Time.unscaledTime + 0.6f;
+                _goAction = null;
             }
             string script = PlayerStatManagerData.Instance.CurrentStoryScript?.ToLowerInvariant();
-            p._menuOptions.Add(new KeyValuePair<string, string>(script, text));
-            p.AddMenuHint(script, text);
+            _menuOptions.Add(new KeyValuePair<string, string>(script, text));
+            AddMenuHint(script, text);
         }
 
         private void AddMenuHint(string script, string text)
@@ -385,7 +492,10 @@ namespace KnownUnknown
             GUI.matrix = Matrix4x4.Scale(new Vector3(scale, scale, 1));
             if (_window.x < 0)
                 _window.x = Screen.width / scale - _window.width - 40;
-            _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢", _windowStyle);
+            if (_broken != null)
+                GUILayout.Window(0x4B55, new Rect(_window.x, _window.y, _window.width, 0), DrawBroken, "多玩10塊錢", _windowStyle);
+            else
+                _window = GUILayout.Window(0x4B55, _window, DrawWindow, "多玩10塊錢", _windowStyle);
         }
 
         // 寫回設定檔；SettingChanged 會重算清單和選單
@@ -533,6 +643,13 @@ namespace KnownUnknown
                     GUILayout.Label("      " + l, _small);
             }
             GUILayout.Space(10);
+        }
+
+        private void DrawBroken(int id)
+        {
+            GUILayout.Label(Paint.Color(Paint.Lacking, _broken), _small);
+            if (SelfUpdate.Status != null)
+                GUILayout.Label(SelfUpdate.Status, _small);
         }
 
         private void DrawWindow(int id)
