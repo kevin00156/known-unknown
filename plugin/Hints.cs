@@ -61,12 +61,18 @@ namespace KnownUnknown
     {
         public const string Lacking = "#B48C5A";   // 條件不足：暗一點的土黃，不搶眼
         public const string Closed = "#8C8C8C";    // 現版本未開放：灰
+        // 條件裡的每個比較：已達成 / 還沒。跟骰子大師同一組綠、紅
+        public const string Met = "#A3B86C";
+        public const string Unmet = "#CD594A";
 
         public static string Color(string color, string s) => $"<color={color}>{s}</color>";
 
-        // 日誌用：拿掉顏色，灰色的標「(未開放)」
+        public static string Strip(string s) => Regex.Replace(s, "</?color[^>]*>", "");
+
+        // 日誌用：拿掉顏色，灰色的標「(未開放)」,條件的綠 / 紅改標 ✓ / ✗
         public static string Plain(string s) =>
-            (s.StartsWith($"<color={Closed}>") ? "(未開放)" : "") + Regex.Replace(s, "</?color[^>]*>", "");
+            (s.StartsWith($"<color={Closed}>") ? "(未開放)" : "")
+            + Strip(s.Replace($"<color={Met}>", "✓").Replace($"<color={Unmet}>", "✗"));
     }
 
     // 一個入口的白字：現在走得到的，和被條件擋住的(原因 → 白字)
@@ -78,9 +84,12 @@ namespace KnownUnknown
 
         public Tally Count => Tally.Of(Open.Count > 0 ? 1 : 0, Open);
 
-        // 「1 段・3 句：小師妹好感 ≥ 20(目前 14)」,橘 = 條件不足、灰 = 現版本未開放;what 放最前面(「抽到「其他」」)
+        // 「1 段・3 句：小師妹好感 ≥ 20(目前 14)」;what 放最前面(「抽到「其他」」)。
+        // 條件不足：整行土黃，裡面每個條件自己的綠 / 紅蓋過去；現版本未開放：整行灰，不分綠紅(反正拿不到)
         public IEnumerable<string> LockedLines(string what = "") =>
-            Locked.Select(x => Paint.Color(Closed.Contains(x.Key) ? Paint.Closed : Paint.Lacking, $"{what}{Tally.Of(1, x.Value)}:{x.Key}"));
+            Locked.Select(x => Closed.Contains(x.Key)
+                ? Paint.Color(Paint.Closed, Paint.Strip($"{what}{Tally.Of(1, x.Value)}:{x.Key}"))
+                : Paint.Color(Paint.Lacking, $"{what}{Tally.Of(1, x.Value)}:{x.Key}"));
     }
 
     internal class Hint

@@ -449,27 +449,35 @@ namespace KnownUnknown
             if (UseCount(s))
             {
                 List<ValueCompareItem> counts = CountItems(s);
-                return g.Value <= counts.Count
+                return Paint.Color(Paint.Unmet, g.Value <= counts.Count
                     ? $"第 {Ops[CountOp(counts[g.Value - 1])]} {CountValue(counts[g.Value - 1])} 次來(目前第 {Count(s) + 1} 次)"
-                    : "次數條件";
+                    : "次數條件");
             }
+            // Switch 回傳第一個成立的分支：要走到第 N 個，前面的都不能成立，第 N 個自己要成立。
+            // 前面已經不成立的不用列；現在成立的(把這個分支搶走的)寫成反向條件。最後的「其他」分支沒有自己的條件
             List<ConditionResultItem> items = SwitchItems(s);
-            if (g.Value >= 1 && g.Value <= items.Count)
-                return Describe(items[g.Value - 1], flagSource);
-            // 最後一個分支：前面每個分支都不成立。已經不成立的不用列(全都不成立就全列，至少說得出要什麼)
-            List<ConditionResultItem> holding = items.Where(Eval).ToList();
-            return string.Join("；", (holding.Count > 0 ? holding : items).Select(i => Describe(i, flagSource, true)));
+            int own = g.Value - 1;
+            if (own < 0)
+                return null;
+            List<string> parts = items.Take(own).Where(Eval).Select(i => Describe(i, flagSource, true, true)).ToList();
+            if (own < items.Count)
+                parts.Add(Describe(items[own], flagSource, false, parts.Count > 0));
+            else if (parts.Count == 0)
+                parts.AddRange(items.Select(i => Describe(i, flagSource, true, items.Count > 1)));   // 全都不成立還被擋：至少說得出要什麼
+            return string.Join(" 且 ", parts);
         }
 
-        // against:要的是這個條件不成立。照 De Morgan 寫成反向條件：比較反過來、且/或對調
-        public string Describe(ConditionResultItem c, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against = false)
+        // 每個比較各自上色：綠 = 已達成、紅 = 還沒，全部列出。
+        // against:要的是這個條件不成立。照 De Morgan 寫成反向條件：比較反過來、且/或對調。
+        // inAnd:外面還要用「且」跟別的條件接，自己是「或」就加括號
+        public string Describe(ConditionResultItem c, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against = false,
+            bool inAnd = false)
         {
-            // 「且」只列還沒達成的；「或」全部列出(任一個達成就好)。against 時比較成立 = 還沒達成
             List<StatCompareItem> xs = Compares(c);
             bool and = (LogicOp(c) == LogicOperatorType.AND) != against;
-            if (and && xs.Any(x => Compare(x) == against))
-                xs = xs.Where(x => Compare(x) == against).ToList();
-            return string.Join(and ? " 且 " : " 或 ", xs.Select(x => Describe(x, flagSource, against)));
+            string all = string.Join(and ? " 且 " : " 或 ", xs.Select(x =>
+                Paint.Color(Compare(x) != against ? Paint.Met : Paint.Unmet, Describe(x, flagSource, against))));
+            return inAnd && !and && xs.Count > 1 ? $"({all})" : all;
         }
 
         private string Describe(StatCompareItem x, System.Func<FlagData, System.Func<int, bool>, string> flagSource, bool against)
