@@ -464,7 +464,10 @@ namespace KnownUnknown
                 parts.Add(Describe(items[own], flagSource, false, parts.Count > 0));
             else if (parts.Count == 0)
                 parts.AddRange(items.Select(i => Describe(i, flagSource, true, items.Count > 1)));   // 全都不成立還被擋：至少說得出要什麼
-            return string.Join(" 且 ", parts);
+            if (parts.Count == 1 && parts[0].StartsWith("("))
+                parts[0] = parts[0].Substring(1, parts[0].Length - 2);   // 只有一項，不用括號
+            // 前面分支的反向條件常和自己的條件重複(前面「性情 ≥ 40」、自己「性情 < 40 且 性情 > 20」):同一句只列一次
+            return string.Join(" 且 ", parts.SelectMany(p => p.StartsWith("(") ? new[] { p } : p.Split(new[] { " 且 " }, System.StringSplitOptions.None)).Distinct());
         }
 
         // 每個比較各自上色：綠 = 已達成、紅 = 還沒，全部列出。
