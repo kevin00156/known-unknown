@@ -192,11 +192,15 @@ namespace KnownUnknown
             }
         }
 
-        // 同 Walk 但不過濾，每一項附上「從 start 走到它」沿途所有的分支條件(跳轉所在分支 + 自己所在分支)
+        // 同 Walk 但不過濾，每一項附上「從 start 走到它」沿途所有的分支條件(跳轉所在分支 + 自己所在分支)。
+        // 走到同一份劇本的路不只一條時(兩個分支都跳過去),每條路各列一次：呼叫端只要有一條路走得通就算走得到。
+        // 條件比另一條路多的路不用列(少的那條通，它才可能通);繞一圈回來的路一定比較多，所以迴圈會停。
         // back:走到這個劇本就停(選項劇情演完跳回選單)
         public IEnumerable<KeyValuePair<Item, Guard[]>> Paths(string start, string back = null)
         {
-            HashSet<string> seen = new HashSet<string> { start, back };
+            Dictionary<string, List<Guard[]>> ways = new Dictionary<string, List<Guard[]>> { { start, new List<Guard[]> { new Guard[0] } } };
+            if (back != null)
+                ways[back] = new List<Guard[]> { new Guard[0] };
             Queue<KeyValuePair<string, Guard[]>> queue = new Queue<KeyValuePair<string, Guard[]>>();
             queue.Enqueue(new KeyValuePair<string, Guard[]>(start, new Guard[0]));
             while (queue.Count > 0)
@@ -208,11 +212,24 @@ namespace KnownUnknown
                 foreach (Item i in s.Items)
                 {
                     Guard[] path = at.Value.Length == 0 ? i.Guards : at.Value.Concat(i.Guards).ToArray();
-                    if (i.Kind == ItemKind.Script && Has(i.Value) && !_stop.Contains(i.Value) && seen.Add(i.Value))
+                    if (i.Kind == ItemKind.Script && Has(i.Value) && !_stop.Contains(i.Value) && NewWay(ways, i.Value, path))
                         queue.Enqueue(new KeyValuePair<string, Guard[]>(i.Value, path));
                     yield return new KeyValuePair<Item, Guard[]>(i, path);
                 }
             }
+        }
+
+        // 一份劇本最多記幾條路：層層會合的劇本路數會相乘
+        private const int MaxWays = 4;
+
+        private static bool NewWay(Dictionary<string, List<Guard[]>> ways, string script, Guard[] path)
+        {
+            if (!ways.TryGetValue(script, out List<Guard[]> known))
+                ways[script] = known = new List<Guard[]>();
+            if (known.Count >= MaxWays || known.Any(k => k.All(path.Contains)))
+                return false;
+            known.Add(path);
+            return true;
         }
 
         // 選單劇本 menu 裡，選了 option 會演的項目(在這個選項分支裡的)。null = 不認得這個選項

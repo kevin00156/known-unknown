@@ -185,6 +185,8 @@ namespace KnownUnknown
             List<KeyValuePair<Item, Guard[]>> all = paths.ToList();
             Dictionary<string, HashSet<int>> inStory = Written(all);
             Outlook o = new Outlook();
+            // 同一句可能有好幾條路走得到(兩個分支會合):有一條通就算看得到；都不通只列一個原因，條件不足的優先於未開放的
+            Dictionary<string, string> placed = new Dictionary<string, string>();
             foreach (KeyValuePair<Item, Guard[]> x in all)
             {
                 if (!StoryIndex.Seeable(x.Key.Kind) || Game.Seen(x.Key.Value) || o.Open.Contains(x.Key.Value))
@@ -201,6 +203,13 @@ namespace KnownUnknown
                     continue;
                 List<string> needs = blockers.Select(g => _cond.Need(g, FlagSource)).Where(w => w != null).Distinct().ToList();
                 string why = string.Join(";還要 ", Absorb(needs));
+                if (placed.TryGetValue(x.Key.Value, out string before))
+                {
+                    if (closed || !o.Closed.Contains(before))
+                        continue;
+                    o.Locked[before].Remove(x.Key.Value);
+                }
+                placed[x.Key.Value] = why;
                 if (!o.Locked.TryGetValue(why, out HashSet<string> keys))
                     o.Locked[why] = keys = new HashSet<string>();
                 if (closed)
@@ -510,13 +519,16 @@ namespace KnownUnknown
         private class Gated
         {
             public string Key;
-            public Guard[] Guards;
+            public Guard[][] Ways;   // 走得到這一句的每條路；有一條沒被擋就看得到
             public string Root;
             public Dictionary<string, HashSet<int>> InStory;   // 這個入口自己會寫入的旗標和值
             public HashSet<string> Flags;     // 沿途條件牽涉到的旗標
         }
 
         private List<Gated> _gated;
+
+        // 每條路都有條件擋著才算擋住
+        private bool Blocked(Gated g) => g.Ways.All(w => w.Any(x => Blocks(x, g.InStory)));
         private Dictionary<string, FlagData> _flags;
 
         // 本旬可以去的入口：(說明, 劇本)。地點事件表每個機率 > 0 的結果、本旬的任務
@@ -606,11 +618,11 @@ namespace KnownUnknown
             {
                 List<KeyValuePair<Item, Guard[]>> all = _index.Paths(root).ToList();
                 Dictionary<string, HashSet<int>> inStory = Written(all);
-                foreach (KeyValuePair<Item, Guard[]> x in all.Where(x => StoryIndex.Seeable(x.Key.Kind)))
+                foreach (IGrouping<string, Guard[]> ways in all.Where(x => StoryIndex.Seeable(x.Key.Kind)).GroupBy(x => x.Key.Value, x => x.Value))
                 {
-                    HashSet<string> flags = new HashSet<string>(x.Value.SelectMany(Names));
+                    HashSet<string> flags = new HashSet<string>(ways.SelectMany(w => w).SelectMany(Names));
                     if (flags.Count > 0)
-                        _gated.Add(new Gated { Key = x.Key.Value, Guards = x.Value, Root = root, InStory = inStory, Flags = flags });
+                        _gated.Add(new Gated { Key = ways.Key, Ways = ways.ToArray(), Root = root, InStory = inStory, Flags = flags });
                 }
             }
         }
@@ -646,7 +658,7 @@ namespace KnownUnknown
 
             // 現在被擋住、跟這些旗標有關的白字
             List<Gated> blocked = _gated.Where(g => g.Flags.Overlaps(writes.Keys.Select(f => f.name))
-                && !Game.Seen(g.Key) && g.Guards.Any(x => Blocks(x, g.InStory))).ToList();
+                && !Game.Seen(g.Key) && Blocked(g)).ToList();
             List<KeyValuePair<string, MissionCheckData>> pending = PendingMissions().Where(m => !MissionReady(m.Value)).ToList();
 
             foreach (KeyValuePair<FlagData, Dictionary<int, List<Outcome>>> w in writes)
@@ -659,7 +671,7 @@ namespace KnownUnknown
                     _cond.Assume(new Dictionary<FlagData, int> { { w.Key, byValue.Key } });
                     try
                     {
-                        foreach (Gated g in blocked.Where(g => g.Flags.Contains(w.Key.name) && !g.Guards.Any(x => Blocks(x, g.InStory))))
+                        foreach (Gated g in blocked.Where(g => g.Flags.Contains(w.Key.name) && !Blocked(g)))
                         {
                             if (!unlocked.TryGetValue(g.Root, out HashSet<string> keys))
                                 unlocked[g.Root] = keys = new HashSet<string>();
