@@ -59,7 +59,7 @@ finish() {
   trap - EXIT
   if [ $rc != 0 ]; then
     msg="沒發版：${FAIL:-看紀錄}"
-    if [ -z "$DRY" ] && rescue; then msg+="。重抽的資料在分支 game-$BUILD"; fi
+    if [ -z "$DRY" ] && [ -n "$RECORD" ] && rescue; then msg+="。重抽的資料在分支 game-$BUILD"; fi
     notify critical "遊戲更新了，自動發版失敗" "$msg。紀錄：$STATE/log"
   fi
   [ -n "$DRY" ] || [ -z "$RECORD" ] || echo "$BUILD" > "$STATE/buildid"
@@ -93,7 +93,7 @@ for f in plugin/SystemFlags.cs plugin/PositionTables.txt; do
   [ $((new * 10)) -ge $((old * 9)) ] || fail "$f 從 $old 行變成 $new 行，重抽的資料可能壞了"
 done
 VER=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' plugin/KnownUnknown.csproj)
-git diff --quiet "v$VER" HEAD -- plugin updater || fail "$BRANCH 上有 v$VER 之後還沒發版的插件改動，不自動發"
+git diff --quiet "v$VER" HEAD -- plugin updater known_unknown.py || fail "$BRANCH 上有 v$VER 之後還沒發版的插件改動，不自動發"
 
 NEXT=${VER%.*}.$((${VER##*.} + 1))
 GV=$(sed -n 's/.*GameVersion = "\(.*\)";.*/\1/p' plugin/SystemFlags.cs)
