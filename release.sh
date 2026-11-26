@@ -43,6 +43,7 @@ EOF
 LATEST=$OUT/KnownUnknown.zip
 cp "$ZIP" "$LATEST"
 
+[ -z "${DRY_RUN:-}" ] || { echo "DRY_RUN:包好了 $ZIP,不 push、不發版"; exit 0; }
 git push origin HEAD
 if [ $# -gt 0 ]; then
   gh release create "v$VER" "$ZIP" "$LATEST" --target "$(git rev-parse HEAD)" --title "$VER" --notes-file "$1"
