@@ -82,6 +82,13 @@ cp bin/out/KnownUnknown.dll "$GAME/BepInEx/plugins/KnownUnknown/"
 玩家端自動更新看的就是這個 release 的 zip(檔名要是 `KnownUnknown-*.zip`，裡面 DLL 的版本要等於 tag)。
 `updater/`(patcher)換不了自己，盡量別改；改了玩家要手動重新解壓 zip,插件會在日誌提醒。
 
+遊戲更新後自動發版：`./auto-release.sh --install` 裝一個 systemd 使用者層級的 timer，每小時看 Steam 記的版本號(`appmanifest_1859910.acf` 的 `buildid`)。
+變了就在自己的一份 clone(`~/.local/state/known-unknown/repo`)裡重抽上面兩份資料；有差異就把版本末碼 +1、commit、跑 `release.sh`，發版說明會註明「自動發的，沒在遊戲裡實測過」。
+會擋下來不發的情況：重抽的資料少了一成以上、master 上有上一版之後還沒發版的 `plugin/`、`updater/` 改動、編譯或測試沒過。
+擋下來時把重抽的資料推到分支 `game-<buildid>`。發了或沒發成都跳桌面通知，紀錄在 `~/.local/state/known-unknown/log`。
+每個 `buildid` 只試一次；要重試就刪掉 `~/.local/state/known-unknown/buildid`。`./auto-release.sh --dry-run` 照跑到打包完，不 push、不發版。
+它不開遊戲，所以「插件在新版遊戲裡實際跑起來對不對」沒人看過。
+
 自動更新的本機測試：`UpdateSource` 指到本機 `python -m http.server` 放的假 `latest.json`
 (`{"tag_name":"v0.99.0","assets":[{"name":"KnownUnknown-0.99.0.zip","browser_download_url":"http://127.0.0.1:8765/…","digest":"sha256:…"}]}`)。
 下載用 `HttpWebRequest`:`UnityWebRequest` 在 Wine 下從 `release-assets.githubusercontent.com` 下載會收完資料卻一直不結束；
