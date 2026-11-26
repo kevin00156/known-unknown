@@ -14,6 +14,7 @@ uv run python known_unknown.py --game "$GAME/Mortal_Data" --position-tables plug
 [ -z "$(git status --porcelain)" ] || { git status --short; echo "遊戲資料跟 repo 裡的不同(遊戲更新了?),看過、在遊戲裡測過再 commit" >&2; exit 1; }
 GAME="$GAME" tests/run.sh
 
+mkdir -p plugin/bin   # 剛 clone 下來沒有這層：不先建，docker 會用 root 建出來，後面打包就寫不進去
 for p in plugin updater; do
   docker run --rm -v "$PWD/$p":/src -v "$GAME":/game:ro -w /src -e HOME=/tmp \
     mcr.microsoft.com/dotnet/sdk:8.0 dotnet build -c Release -p:GamePath=/game -o /src/bin/out
